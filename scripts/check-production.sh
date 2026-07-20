@@ -15,8 +15,8 @@ cd "$ROOT"
 APP="$ROOT/dist/EliseVoice.app"
 codesign --verify --strict --verbose=2 "$APP"
 [[ "$(lipo -archs "$APP/Contents/MacOS/EliseVoice")" == "arm64" ]]
-[[ "$(defaults read "$APP/Contents/Info" CFBundleShortVersionString)" == "1.5.0" ]]
-[[ "$(defaults read "$APP/Contents/Info" CFBundleVersion)" == "12" ]]
+[[ "$(defaults read "$APP/Contents/Info" CFBundleShortVersionString)" == "1.6.0" ]]
+[[ "$(defaults read "$APP/Contents/Info" CFBundleVersion)" == "13" ]]
 [[ -f "$APP/Contents/Resources/EliseWakeWord.mlmodel" ]]
 [[ -f "$APP/Contents/Resources/ElisePersonalWakeVerifier.mlmodel" ]]
 

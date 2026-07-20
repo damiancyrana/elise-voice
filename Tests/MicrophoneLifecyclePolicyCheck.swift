@@ -5,29 +5,54 @@ enum MicrophoneLifecyclePolicyCheck {
         precondition(MicrophoneLifecyclePolicy.recoveryDelay(afterFailureCount: 1) == 2)
         precondition(MicrophoneLifecyclePolicy.recoveryDelay(afterFailureCount: 4) == 16)
         precondition(MicrophoneLifecyclePolicy.recoveryDelay(afterFailureCount: 10) == 30)
+        precondition(MicrophoneLifecyclePolicy.voiceWakeIdleTimeout == 1_800)
+        precondition(MicrophoneLifecyclePolicy.voiceWakeIdlePollInterval == 30)
+        precondition(!MicrophoneLifecyclePolicy.shouldDisarmVoiceWakeSession(
+            secondsSinceEliseInteraction: 1_900,
+            secondsSinceSystemInput: 10
+        ))
+        precondition(!MicrophoneLifecyclePolicy.shouldDisarmVoiceWakeSession(
+            secondsSinceEliseInteraction: 10,
+            secondsSinceSystemInput: 1_900
+        ))
+        precondition(MicrophoneLifecyclePolicy.shouldDisarmVoiceWakeSession(
+            secondsSinceEliseInteraction: 1_800,
+            secondsSinceSystemInput: 1_800
+        ))
         precondition(MicrophoneLifecyclePolicy.desiredActivity(
             systemAllowsAudio: true,
             appIsReady: true,
             appIsRecording: false,
-            voiceWakeEnabled: true
+            voiceWakeEnabled: true,
+            voiceWakeSessionArmed: true
         ) == .wakeWord)
         precondition(MicrophoneLifecyclePolicy.desiredActivity(
             systemAllowsAudio: true,
             appIsReady: true,
             appIsRecording: false,
-            voiceWakeEnabled: false
+            voiceWakeEnabled: true,
+            voiceWakeSessionArmed: false
+        ) == .inactive)
+        precondition(MicrophoneLifecyclePolicy.desiredActivity(
+            systemAllowsAudio: true,
+            appIsReady: true,
+            appIsRecording: false,
+            voiceWakeEnabled: false,
+            voiceWakeSessionArmed: true
         ) == .inactive)
         precondition(MicrophoneLifecyclePolicy.desiredActivity(
             systemAllowsAudio: true,
             appIsReady: false,
             appIsRecording: true,
-            voiceWakeEnabled: false
+            voiceWakeEnabled: false,
+            voiceWakeSessionArmed: false
         ) == .dictation)
         precondition(MicrophoneLifecyclePolicy.desiredActivity(
             systemAllowsAudio: false,
             appIsReady: false,
             appIsRecording: true,
-            voiceWakeEnabled: true
+            voiceWakeEnabled: true,
+            voiceWakeSessionArmed: true
         ) == .inactive)
 
         // Soak the deterministic policy through repeated state transitions.
@@ -39,7 +64,8 @@ enum MicrophoneLifecyclePolicyCheck {
                 systemAllowsAudio: true,
                 appIsReady: true,
                 appIsRecording: false,
-                voiceWakeEnabled: index.isMultiple(of: 2)
+                voiceWakeEnabled: true,
+                voiceWakeSessionArmed: index.isMultiple(of: 2)
             ) == expected)
         }
     }

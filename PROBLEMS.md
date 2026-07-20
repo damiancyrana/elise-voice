@@ -92,17 +92,22 @@ długością audio.
 Fokus może zmienić się między początkiem nagrania a zakończeniem transkrypcji.
 Elise zapamiętuje proces i dokładny element AX, odrzuca `AXSecureTextField`,
 ponownie sprawdza fokus przed wklejeniem i preferuje bezpośrednie ustawienie
-wartości AX. Kontrolowane `⌘V` jest ścieżką zapasową z przywróceniem poprzedniej
-zawartości schowka. Przy błędzie tekst pozostaje w schowku zamiast trafić do
-przypadkowego pola.
+wartości AX. Część aplikacji zwraca pozorny sukces AX bez zmiany treści, dlatego
+Elise porównuje wartość pola przed i po operacji. Brak rzeczywistej zmiany
+uruchamia kontrolowane `⌘V` z przywróceniem poprzedniej zawartości schowka. Przy
+błędzie tekst pozostaje w schowku zamiast trafić do przypadkowego pola.
 
-## 10. Prywatność a stałe nasłuchiwanie
+## 10. Prywatność a sesyjne nasłuchiwanie
 
 Wybudzenie głosowe wymaga aktywnego urządzenia wejściowego; nie da się reagować
-na hasło przy fizycznie wyłączonym mikrofonie. W trybie gotowości audio jest
-przechowywane wyłącznie w nadpisywanym trzysekundowym buforze RAM. Nie ma zapisu
-rozmów, historii ani automatycznego uczenia. Wyłączenie pozycji „Wybudzanie
-głosem ELISE” w menu całkowicie zatrzymuje mikrofon do czasu użycia `⌥Space`.
+na hasło przy fizycznie wyłączonym mikrofonie. Dlatego nasłuch nie działa stale:
+po starcie mikrofon jest wyłączony, a `⌥Space` otwiera sesję pracy. Aktywność
+klawiatury, myszy lub Elise podtrzymuje ją; 30 minut rzeczywistej bezczynności,
+blokada albo uśpienie kończą sesję.
+W trakcie aktywnej sesji audio jest przechowywane wyłącznie w nadpisywanym
+trzysekundowym buforze RAM. Nie ma zapisu rozmów, historii ani automatycznego
+uczenia. Wyłączenie pozycji „Wybudzanie głosem ELISE” sprawia, że mikrofon
+wyłącza się po każdym dyktowaniu.
 
 ## Stan końcowy
 

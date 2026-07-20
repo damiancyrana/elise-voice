@@ -73,7 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
 
         let voiceWake = NSMenuItem(
-            title: "Wybudzanie głosem „ELISE”",
+            title: "Wybudzanie głosem „ELISE” — sesja 30 min",
             action: #selector(toggleVoiceWake(_:)),
             keyEquivalent: ""
         )

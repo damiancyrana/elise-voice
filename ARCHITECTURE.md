@@ -2,10 +2,12 @@
 
 ## Kontrakt interakcji
 
-Nagrywanie uruchamia `⌥Space` albo lokalnie wykryte słowo „ELISE”. Kończy je
-ponowne `⌥Space`, 20 sekund ciągłej ciszy lub twardy limit 5 minut. Hasło i sygnał
-gotowości są analizowane przed rozpoczęciem właściwego bufora, więc nie trafiają
-do dyktowanego tekstu.
+Po starcie mikrofon jest wyłączony. `⌥Space` rozpoczyna nagrywanie i uzbraja
+30-minutową sesję wybudzania głosem. W jej trakcie nagrywanie uruchamia kolejne
+`⌥Space` albo lokalnie wykryte słowo „ELISE”. Aktywność klawiatury, myszy lub
+Elise podtrzymuje sesję. Kończy je ponowne `⌥Space`, 20 sekund ciągłej ciszy lub twardy limit
+5 minut. Hasło i sygnał gotowości są analizowane przed rozpoczęciem właściwego
+bufora, więc nie trafiają do dyktowanego tekstu.
 
 ## Komponenty
 
@@ -31,10 +33,13 @@ do dyktowanego tekstu.
    ILIS/ILIZ/ELAJS przechodzi do koordynatora; `Lis`, `Elisa` i zwykłe zdania są
    odrzucane bez pokazania okna nagrywania.
 4. `DictationCoordinator` jest maszyną stanów i właścicielem cyklu mikrofonu.
-   Zatrzymuje go podczas transkrypcji, blokady i uśpienia; odbudowuje po zmianie
-   konfiguracji sprzętu. Błędy przejściowe mają wykładniczy backoff i wracają do
-   `ready`; zawieszona transkrypcja ma watchdog i jednorazową odbudowę modelu.
-   Użytkownik może całkowicie wyłączyć ciągły nasłuch.
+   Oddziela trwałą preferencję wybudzania od ulotnego uzbrojenia sesji. Timer
+   sprawdza czas od ostatniej interakcji Elise oraz dowolnego zdarzenia HID;
+   mikrofon zatrzymuje dopiero 30 minut rzeczywistej bezczynności. Blokada i
+   uśpienie kończą sesję natychmiast. Strumień jest odbudowywany po zmianie konfiguracji sprzętu
+   tylko dla nadal aktywnej sesji. Błędy przejściowe mają wykładniczy backoff i
+   wracają do `ready`; zawieszona transkrypcja ma watchdog i jednorazową
+   odbudowę modelu. Użytkownik może całkowicie wyłączyć głosowe wybudzanie.
 5. `TranscriptionService` wymusza język `pl`. Audio dłuższe od okna Whispera
    dzieli przez VAD i dekoduje z trzema workerami — wartością wybraną pomiarem
    99,5-sekundowego polskiego nagrania na docelowym M4 Pro. Model jest stale
@@ -44,8 +49,10 @@ do dyktowanego tekstu.
 7. `TextInserter` zapamiętuje proces i dokładny element AX na początku nagrania.
    Najpierw próbuje bezpośredniej edycji AX, potem kontrolowanego `⌘V`. Jeśli
    fokus się zmienił, nie wkleja tekstu w przypadkowe miejsce i pozostawia go w
-   schowku. Pola `AXSecureTextField` są zawsze odrzucane, a awaryjna ścieżka
-   schowka nie blokuje zakończenia dyktowania przez pełną sekundę.
+   schowku. Sukces bez rzeczywistej zmiany wartości jest wykrywany i kierowany
+   do ścieżki zapasowej. Pola `AXSecureTextField` są zawsze odrzucane, a
+   awaryjna ścieżka schowka nie blokuje zakończenia dyktowania przez pełną
+   sekundę.
 8. `LaunchAtLoginService` używa `SMAppService.mainApp`.
 
 ## Modele
@@ -68,6 +75,8 @@ kandydata, którego nie potwierdził osobisty klasyfikator.
 - Nagranie dyktowania istnieje wyłącznie w RAM; aplikacja nie tworzy historii.
 - Klasyfikator hasła działa lokalnie. Nadpisywany bufor w RAM przechowuje
   najwyżej trzy sekundy do weryfikacji kandydata i nigdy nie trafia na dysk.
+- Mikrofon jest wyłączony po uruchomieniu, po 30 minutach bez użycia Elise oraz
+  po zablokowaniu lub uśpieniu komputera. Ponowne `⌥Space` uzbraja nową sesję.
 - Sieć jest potrzebna tylko do pierwszego pobrania Large v3 z Hugging Face.
 - Logi `OSLog` zawierają stany, czasy i liczbę próbek, nigdy audio ani tekst.
 - `OSSignposter` mierzy start mikrofonu, sygnał gotowości, transkrypcję,

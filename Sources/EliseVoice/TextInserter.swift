@@ -89,6 +89,14 @@ enum TextInserter {
             throw TextInserterError.targetChanged
         }
 
+        let previousValue = stringAttribute(
+            kAXValueAttribute as CFString,
+            of: target.element
+        )
+        let previousSelection = stringAttribute(
+            kAXSelectedTextAttribute as CFString,
+            of: target.element
+        ) ?? ""
         var isSettable: DarwinBoolean = false
         let settableStatus = AXUIElementIsAttributeSettable(
             target.element,
@@ -102,8 +110,25 @@ enum TextInserter {
                 text as CFTypeRef
             )
             if status == .success {
-                logger.info("Transcript inserted through Accessibility API")
-                return
+                // Some applications report AX success without applying the
+                // mutation. Verify it whenever the element exposes its text.
+                try? await Task.sleep(for: .milliseconds(25))
+                let insertionWasApplied = previousValue == nil || stringAttribute(
+                    kAXValueAttribute as CFString,
+                    of: target.element
+                ).map { newValue in
+                    TextInsertionPolicy.directInsertionWasApplied(
+                        previousValue: previousValue ?? "",
+                        previousSelection: previousSelection,
+                        newValue: newValue,
+                        insertedText: text
+                    )
+                } == true
+                if insertionWasApplied {
+                    logger.info("Transcript inserted through Accessibility API")
+                    return
+                }
+                logger.notice("Accessibility API reported success without changing text; using clipboard fallback")
             }
         }
 
@@ -176,6 +201,17 @@ enum TextInserter {
         var identifier: pid_t = 0
         guard AXUIElementGetPid(element, &identifier) == .success else { return nil }
         return identifier
+    }
+
+    private static func stringAttribute(
+        _ attribute: CFString,
+        of element: AXUIElement
+    ) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
+            return nil
+        }
+        return value as? String
     }
 
     private static func isSecureTextField(_ element: AXUIElement) -> Bool {

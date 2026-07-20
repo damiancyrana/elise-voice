@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 import EliseVoiceCore
 import OSLog
@@ -34,6 +35,7 @@ final class DictationCoordinator {
     private var audioRecovery: Task<Void, Never>?
     private var failureRecovery: Task<Void, Never>?
     private var transcriptionWatchdog: Task<Void, Never>?
+    private var voiceWakeIdleTimer: Task<Void, Never>?
     private var memoryPressureSource: DispatchSourceMemoryPressure?
     private var lifecycleObservers: [NSObjectProtocol] = []
     private var isStartingRecording = false
@@ -43,6 +45,8 @@ final class DictationCoordinator {
     private var transcriptionGeneration: UInt64 = 0
     private var lastReportedDroppedBuffers: UInt64 = 0
     private var consecutiveAudioRecoveryFailures = 0
+    private var voiceWakeSessionArmed = false
+    private var lastEliseInteractionUptime: TimeInterval = 0
 
     private(set) var voiceWakeEnabled: Bool
     private(set) var state: DictationState = .preparing {
@@ -83,6 +87,7 @@ final class DictationCoordinator {
     func prepare() async {
         failureRecovery?.cancel()
         failureRecovery = nil
+        disarmVoiceWakeSession(reason: "application preparation", reconcile: false)
         state = .preparing
         stopMicrophone()
 
@@ -127,11 +132,12 @@ final class DictationCoordinator {
 
     func setVoiceWakeEnabled(_ enabled: Bool) {
         guard voiceWakeEnabled != enabled else { return }
-        wakeVerificationGeneration &+= 1
-        isVerifyingWakeWord = false
         voiceWakeEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: Self.voiceWakePreferenceKey)
         logger.info("Voice wake changed: \(enabled)")
+        if !enabled {
+            disarmVoiceWakeSession(reason: "disabled by user", reconcile: false)
+        }
         reconcileMicrophone()
     }
 
@@ -140,16 +146,19 @@ final class DictationCoordinator {
         failureRecovery = nil
         switch state {
         case .ready:
+            armVoiceWakeSession()
             wakeVerificationGeneration &+= 1
             isVerifyingWakeWord = false
             await startRecordingIfAuthorized()
         case .failed:
             if modelIsReady, wakeWordIsReady {
+                armVoiceWakeSession()
                 await startRecordingIfAuthorized()
             } else {
                 await prepare()
             }
         case .recording:
+            armVoiceWakeSession()
             await stopAndTranscribe()
         case .preparing, .transcribing:
             break
@@ -169,6 +178,9 @@ final class DictationCoordinator {
         failureRecovery = nil
         transcriptionWatchdog?.cancel()
         transcriptionWatchdog = nil
+        voiceWakeIdleTimer?.cancel()
+        voiceWakeIdleTimer = nil
+        voiceWakeSessionArmed = false
         transcriptionGeneration &+= 1
         wakeVerificationGeneration &+= 1
         isVerifyingWakeWord = false
@@ -182,7 +194,7 @@ final class DictationCoordinator {
     }
 
     private func handleWakeWordDetection() async {
-        guard voiceWakeEnabled, state == .ready,
+        guard voiceWakeEnabled, voiceWakeSessionArmed, state == .ready,
               !isStartingRecording, !isVerifyingWakeWord else { return }
 
         isVerifyingWakeWord = true
@@ -193,7 +205,7 @@ final class DictationCoordinator {
         // Capture the end of the spoken name before taking the rolling snapshot.
         try? await Task.sleep(for: .milliseconds(420))
         guard generation == wakeVerificationGeneration,
-              isVerifyingWakeWord, voiceWakeEnabled,
+              isVerifyingWakeWord, voiceWakeEnabled, voiceWakeSessionArmed,
               systemAllowsAudio, state == .ready else { return }
 
         do {
@@ -212,11 +224,12 @@ final class DictationCoordinator {
                 accepted = try await transcriptionService.verifyWakeWord(samples: samples)
             }
             guard generation == wakeVerificationGeneration,
-                  isVerifyingWakeWord, voiceWakeEnabled,
+                  isVerifyingWakeWord, voiceWakeEnabled, voiceWakeSessionArmed,
                   systemAllowsAudio, state == .ready else { return }
             isVerifyingWakeWord = false
 
             if accepted {
+                armVoiceWakeSession()
                 await startRecordingIfAuthorized()
             } else {
                 logger.notice("Wake-word candidate rejected by second-stage verifier")
@@ -255,7 +268,9 @@ final class DictationCoordinator {
             }
             insertionTarget = try TextInserter.captureTarget()
             let microphoneWasAlreadyRunning = audioCapture.isMonitoring
-            try ensureMicrophoneRunning(includeWakeWord: voiceWakeEnabled)
+            try ensureMicrophoneRunning(
+                includeWakeWord: voiceWakeEnabled && voiceWakeSessionArmed
+            )
             audioCapture.setWakeWordAnalysisEnabled(false)
 
             if !microphoneWasAlreadyRunning {
@@ -424,7 +439,8 @@ final class DictationCoordinator {
             systemAllowsAudio: systemAllowsAudio,
             appIsReady: isReady,
             appIsRecording: isRecording,
-            voiceWakeEnabled: voiceWakeEnabled
+            voiceWakeEnabled: voiceWakeEnabled,
+            voiceWakeSessionArmed: voiceWakeSessionArmed
         )
 
         guard activity != .inactive else {
@@ -445,6 +461,67 @@ final class DictationCoordinator {
 
     private func stopMicrophone() {
         audioCapture.stopMonitoring()
+    }
+
+    private func armVoiceWakeSession() {
+        guard voiceWakeEnabled else { return }
+        let wasArmed = voiceWakeSessionArmed
+        voiceWakeSessionArmed = true
+        lastEliseInteractionUptime = ProcessInfo.processInfo.systemUptime
+        voiceWakeIdleTimer?.cancel()
+        voiceWakeIdleTimer = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(
+                        for: .seconds(
+                            MicrophoneLifecyclePolicy.voiceWakeIdlePollInterval
+                        )
+                    )
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled, let self else { return }
+                let secondsSinceEliseInteraction = max(
+                    ProcessInfo.processInfo.systemUptime - lastEliseInteractionUptime,
+                    0
+                )
+                guard let anyInputEvent = CGEventType(rawValue: UInt32.max) else {
+                    continue
+                }
+                let secondsSinceSystemInput = CGEventSource.secondsSinceLastEventType(
+                    .combinedSessionState,
+                    eventType: anyInputEvent
+                )
+                guard MicrophoneLifecyclePolicy.shouldDisarmVoiceWakeSession(
+                    secondsSinceEliseInteraction: secondsSinceEliseInteraction,
+                    secondsSinceSystemInput: secondsSinceSystemInput
+                ) else { continue }
+                voiceWakeIdleTimer = nil
+                disarmVoiceWakeSession(reason: "30 minutes of system inactivity")
+                return
+            }
+        }
+        if !wasArmed {
+            logger.info("Voice wake session armed for 30 minutes")
+        }
+    }
+
+    private func disarmVoiceWakeSession(
+        reason: String,
+        reconcile: Bool = true
+    ) {
+        let wasArmed = voiceWakeSessionArmed
+        voiceWakeIdleTimer?.cancel()
+        voiceWakeIdleTimer = nil
+        voiceWakeSessionArmed = false
+        wakeVerificationGeneration &+= 1
+        isVerifyingWakeWord = false
+        if wasArmed {
+            logger.info("Voice wake session disarmed: \(reason, privacy: .public)")
+        }
+        if reconcile {
+            reconcileMicrophone()
+        }
     }
 
     private func scheduleAudioRecovery(reason: String) {
@@ -533,8 +610,7 @@ final class DictationCoordinator {
 
     private func suspendForSystem() {
         systemAllowsAudio = false
-        wakeVerificationGeneration &+= 1
-        isVerifyingWakeWord = false
+        disarmVoiceWakeSession(reason: "system suspension", reconcile: false)
         audioRecovery?.cancel()
         audioRecovery = nil
         if case .recording = state {

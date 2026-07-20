@@ -3,10 +3,10 @@
 ## Zakres produktu
 
 Elise Voice wykonuje tylko jeden przepływ: rozpoczęcie dyktowania przez
-`⌥Space` lub ILIS/ILIZ/ELAJS, lokalną transkrypcję po polsku i wklejenie do
-wcześniej aktywnego pola. Zatrzymanie następuje po ponownym `⌥Space`, 20 s
-ciszy albo po osiągnięciu limitu 5 minut. Rozbudowa poza ten kontrakt wymaga
-świadomej decyzji produktowej.
+`⌥Space` lub — w sesji podtrzymywanej aktywnością użytkownika — ILIS/ILIZ/ELAJS, lokalną
+transkrypcję po polsku i wklejenie do wcześniej aktywnego pola. Zatrzymanie
+następuje po ponownym `⌥Space`, 20 s ciszy albo po osiągnięciu limitu 5 minut.
+Rozbudowa poza ten kontrakt wymaga świadomej decyzji produktowej.
 
 ## Wymagania
 
@@ -143,8 +143,9 @@ Zainstalowana aplikacja nigdy nie loguje rozpoznanego tekstu.
 - Dostępność jest zaznaczona, ale wklejanie nie działa: usunąć starą pozycję TCC,
   zresetować zgodę i dodać aktualny `/Applications/EliseVoice.app`.
 - Panel pokazuje `START`: trwa pierwsze pobranie lub przygotowanie Large v3.
-- Mikrofon ma być wyłączony w spoczynku: wyłączyć głosowe wybudzanie w menu;
-  `⌥Space` nadal działa.
+- Mikrofon po starcie jest wyłączony: pierwsze `⌥Space` dyktuje i uzbraja
+  30-minutowy nasłuch. Jeżeli ma wyłączać się od razu po każdym dyktowaniu,
+  wyłączyć głosowe wybudzanie w menu.
 - Zmiana mikrofonu lub wybudzenie: odczekać automatyczną odbudowę strumienia;
   kolejne niepowodzenia mają kontrolowany backoff.
 - Brak wklejenia po zmianie aplikacji: tekst powinien pozostać w schowku; jest
@@ -175,6 +176,9 @@ zewnętrzną, nie powinien być obchodzony zmianą skryptów.
 - Żaden log nie może zawierać audio ani dyktowanego tekstu.
 - Każda zmiana progów hasła musi przejść zarówno korpus ogólny, jak i 54 próbki
   personalne.
+- Zmiana czasu sesji musi zachować kontrakt: start i blokada oznaczają mikrofon
+  wyłączony, `⌥Space` uzbraja, aktywność HID podtrzymuje, a 30 minut bezczynności
+  rozbraja.
 - Zmiana identyfikatora bundle lub sposobu podpisu wymaga planu migracji TCC.
 - Nowy build nie jest gotowy do instalacji, dopóki nie przejdzie
   `scripts/check-production.sh`.

@@ -1,12 +1,17 @@
 # Elise Voice
 
-Wersja 1.5.0 — lokalne dyktowanie po polsku na macOS.
+Wersja 1.6.0 — lokalne dyktowanie po polsku na macOS.
 
 ## Działanie
 
-- `⌥Space` rozpoczyna nagrywanie.
-- Wypowiedzenie „ELISE” — jako „ILIS”, „ILIZ” lub „ELAJS” — również
-  rozpoczyna nagrywanie.
+- Po uruchomieniu aplikacji mikrofon pozostaje wyłączony.
+- Pierwsze `⌥Space` rozpoczyna nagrywanie i uzbraja głosowe wybudzanie na
+  30-minutową sesję pracy.
+- W aktywnej sesji wypowiedzenie „ELISE” — jako „ILIS”, „ILIZ” lub „ELAJS” —
+  również rozpoczyna nagrywanie.
+- Aktywność klawiatury, myszy albo użycie Elise utrzymuje sesję. Po 30 minutach
+  rzeczywistej bezczynności mikrofon wyłącza się; kolejne `⌥Space` rozpoczyna
+  nową sesję.
 - Krótki dwutonowy sygnał potwierdza gotowość — mów od razu po jego zakończeniu.
 - Ponowne `⌥Space` kończy nagrywanie natychmiast.
 - 20 sekund ciągłej ciszy kończy nagrywanie automatycznie.
@@ -17,8 +22,8 @@ Wersja 1.5.0 — lokalne dyktowanie po polsku na macOS.
   Elise i modulację głosu, nie zabierając fokusu z aktualnej aplikacji.
 - Aplikacja jest obecna w Docku i rejestruje się jako element uruchamiany przy
   logowaniu.
-- W menu aplikacji można wyłączyć „Wybudzanie głosem ELISE”. Wtedy mikrofon jest
-  wyłączony w spoczynku i uruchamia się wyłącznie po `⌥Space`.
+- W menu aplikacji można całkowicie wyłączyć „Wybudzanie głosem ELISE”. Wtedy
+  `⌥Space` nadal dyktuje, ale po zakończeniu mikrofon natychmiast się wyłącza.
 
 Elise Voice nie ma konta, chmury, historii nagrań ani edytora. Język
 transkrypcji jest zawsze ustawiony na polski.
@@ -47,15 +52,16 @@ korzysta z Audio Feature Print i dostępnych jednostek CPU, GPU oraz Apple
 Neural Engine. Dłuższe nagrania są dzielone przez VAD na okna i składane w
 jeden tekst.
 
-Mikrofon działa jako jeden współdzielony strumień 16 kHz. Przy aktywnym
-wybudzaniu głosowym strumień musi nasłuchiwać w stanie gotowości, ale audio nie
-jest zapisywane. W RAM istnieje wyłącznie nadpisywany, trzysekundowy bufor
+Mikrofon działa jako jeden współdzielony strumień 16 kHz. Nie uruchamia się
+automatycznie razem z aplikacją. `⌥Space` uzbraja nasłuch, a aktywność
+klawiatury, myszy lub Elise podtrzymuje sesję. W aktywnej sesji strumień musi nasłuchiwać w
+stanie gotowości, ale audio nie jest zapisywane. Po bezczynności, blokadzie albo
+uśpieniu strumień jest zatrzymywany. W RAM istnieje wyłącznie nadpisywany, trzysekundowy bufor
 potrzebny do potwierdzenia hasła. Tania bramka energii z pre-roll uruchamia pełny klasyfikator
-tylko wokół mowy. Mikrofon wyłącza się podczas transkrypcji, blokady ekranu,
-uśpienia i krótkiego odzyskiwania po błędzie; po zmianie urządzenia audio
-strumień jest bezpiecznie odbudowywany. Po wyłączeniu wybudzania głosowego
-pozostaje wyłączony aż do użycia skrótu. Nagranie dyktowania istnieje tylko w
-RAM i jest zwalniane po transkrypcji.
+tylko wokół mowy. Mikrofon wyłącza się także podczas transkrypcji i krótkiego
+odzyskiwania po błędzie; po zmianie urządzenia audio strumień jest bezpiecznie
+odbudowywany wyłącznie wtedy, gdy sesja nadal jest aktywna. Nagranie dyktowania
+istnieje tylko w RAM i jest zwalniane po transkrypcji.
 
 ## Instalacja
 
@@ -109,7 +115,9 @@ późniejszego odtworzenia modelu.
 ## Przepływ danych
 
 ```text
-Core ML ELISE lub ⌥Space
+⌥Space → aktywna sesja 30 min
+       ↓
+Core ML ELISE lub kolejne ⌥Space
             ↓
       strumień 16 kHz
        ↓
