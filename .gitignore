@@ -1,0 +1,13 @@
+.build/
+.swiftpm/
+dist/
+.DS_Store
+
+# Zachowane lokalnie iteracje projektowe; bundle i repo używają wyłącznie
+# AppIcon-1024.png, ElisePortraitSource.png i ElisePortraitTransparent-v5.png.
+Resources/Images/EliseIconArtwork.png
+Resources/Images/EliseIconChroma.png
+Resources/Images/ElisePortraitChroma-*.png
+Resources/Images/ElisePortraitTransparent-v2.png
+Resources/Images/ElisePortraitTransparent-v3.png
+Resources/Images/ElisePortraitTransparent-v4.png
