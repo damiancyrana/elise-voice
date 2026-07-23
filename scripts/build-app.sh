@@ -30,15 +30,6 @@ cp "$ROOT/Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 cp "$ROOT/.build/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 cp "$ROOT/Resources/Images/AppIcon-1024.png" "$APP_BUNDLE/Contents/Resources/AppIcon-1024.png"
 cp "$ROOT/Resources/Images/ElisePortraitTransparent-v5.png" "$APP_BUNDLE/Contents/Resources/ElisePortraitTransparent-v5.png"
-[[ -f "$ROOT/Resources/Models/EliseWakeWord.mlmodel" ]] || {
-    echo "Brakuje modelu ELISE. Uruchom scripts/train-wake-word.sh." >&2
-    exit 1
-}
-cp "$ROOT/Resources/Models/EliseWakeWord.mlmodel" "$APP_BUNDLE/Contents/Resources/EliseWakeWord.mlmodel"
-if [[ -f "$ROOT/Resources/Models/ElisePersonalWakeVerifier.mlmodel" ]]; then
-    cp "$ROOT/Resources/Models/ElisePersonalWakeVerifier.mlmodel" \
-        "$APP_BUNDLE/Contents/Resources/ElisePersonalWakeVerifier.mlmodel"
-fi
 cp "$ROOT/THIRD_PARTY_NOTICES.md" "$APP_BUNDLE/Contents/Resources/THIRD_PARTY_NOTICES.md"
 cp "$ROOT/.build/checkouts/argmax-oss-swift/LICENSE" "$APP_BUNDLE/Contents/Resources/ARGMAX_LICENSE"
 cp "$ROOT/.build/checkouts/argmax-oss-swift/NOTICES" "$APP_BUNDLE/Contents/Resources/ARGMAX_NOTICES"

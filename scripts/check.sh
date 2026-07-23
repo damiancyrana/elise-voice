@@ -19,21 +19,6 @@ swiftc \
     -o "$TEMP_DIR/dictation-policy-check"
 "$TEMP_DIR/dictation-policy-check"
 swiftc \
-    Sources/EliseVoiceCore/WakeWordDecisionGate.swift \
-    Tests/WakeWordDecisionGateCheck.swift \
-    -o "$TEMP_DIR/wake-word-decision-gate-check"
-"$TEMP_DIR/wake-word-decision-gate-check"
-swiftc \
-    Sources/EliseVoiceCore/PersonalWakeWordAudioNormalizer.swift \
-    Tests/PersonalWakeWordAudioNormalizerCheck.swift \
-    -o "$TEMP_DIR/personal-wake-audio-normalizer-check"
-"$TEMP_DIR/personal-wake-audio-normalizer-check"
-swiftc \
-    Sources/EliseVoiceCore/WakeWordTranscriptMatcher.swift \
-    Tests/WakeWordTranscriptMatcherCheck.swift \
-    -o "$TEMP_DIR/wake-word-transcript-matcher-check"
-"$TEMP_DIR/wake-word-transcript-matcher-check"
-swiftc \
     Sources/EliseVoiceCore/MicrophoneLifecyclePolicy.swift \
     Tests/MicrophoneLifecyclePolicyCheck.swift \
     -o "$TEMP_DIR/microphone-lifecycle-policy-check"
@@ -46,13 +31,13 @@ swiftc \
 plutil -lint Resources/Info.plist
 plutil -lint Resources/EliseVoice.entitlements
 zsh -n scripts/*.sh
-xcrun swiftc -typecheck scripts/train-wake-word.swift
-xcrun swiftc -typecheck scripts/check-wake-word.swift
-xcrun swiftc -typecheck scripts/inspect-wake-word.swift
-[[ -f Resources/Models/EliseWakeWord.mlmodel ]]
-[[ -f Resources/Models/ElisePersonalWakeVerifier.mlmodel ]]
 if rg -n 'WakeWordRecognizer|WakeWordMatcher' Sources Integration; then
     echo "Pozostała stara ścieżka wybudzania Whisper Tiny." >&2
+    exit 1
+fi
+if rg -n 'WakeWordDetector|PersonalWakeWordVerifier|voiceWake|wakeWord' \
+    Sources/EliseVoice Sources/EliseVoiceCore/AudioCaptureService.swift; then
+    echo "Produkcyjna ścieżka nadal zawiera aktywację głosową." >&2
     exit 1
 fi
 

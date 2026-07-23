@@ -11,9 +11,13 @@ enum GlobalHotKeyError: Error {
 final class GlobalHotKey: @unchecked Sendable {
     private var hotKeyReference: EventHotKeyRef?
     private var eventHandlerReference: EventHandlerRef?
+    private let keyCode: UInt32
+    private let modifiers: UInt32
     private let action: @Sendable () -> Void
 
     init(keyCode: UInt32, modifiers: UInt32, action: @escaping @Sendable () -> Void) throws {
+        self.keyCode = keyCode
+        self.modifiers = modifiers
         self.action = action
 
         var eventType = EventTypeSpec(
@@ -57,6 +61,34 @@ final class GlobalHotKey: @unchecked Sendable {
             throw GlobalHotKeyError.installingHandler(handlerStatus)
         }
 
+        do {
+            try register()
+        } catch {
+            if let eventHandlerReference {
+                RemoveEventHandler(eventHandlerReference)
+            }
+            throw error
+        }
+    }
+
+    func refreshRegistration() throws {
+        if let hotKeyReference {
+            UnregisterEventHotKey(hotKeyReference)
+            self.hotKeyReference = nil
+        }
+        try register()
+    }
+
+    deinit {
+        if let hotKeyReference {
+            UnregisterEventHotKey(hotKeyReference)
+        }
+        if let eventHandlerReference {
+            RemoveEventHandler(eventHandlerReference)
+        }
+    }
+
+    private func register() throws {
         let identifier = EventHotKeyID(signature: eliseVoiceHotKeySignature, id: 1)
         let registrationStatus = RegisterEventHotKey(
             keyCode,
@@ -66,21 +98,8 @@ final class GlobalHotKey: @unchecked Sendable {
             0,
             &hotKeyReference
         )
-
         guard registrationStatus == noErr else {
-            if let eventHandlerReference {
-                RemoveEventHandler(eventHandlerReference)
-            }
             throw GlobalHotKeyError.registeringShortcut(registrationStatus)
-        }
-    }
-
-    deinit {
-        if let hotKeyReference {
-            UnregisterEventHotKey(hotKeyReference)
-        }
-        if let eventHandlerReference {
-            RemoveEventHandler(eventHandlerReference)
         }
     }
 }

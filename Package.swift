@@ -28,6 +28,13 @@ let package = Package(
             name: "EliseVoiceCore",
             dependencies: [
                 .product(name: "WhisperKit", package: "argmax-oss-swift")
+            ],
+            exclude: [
+                "PersonalWakeWordAudioNormalizer.swift",
+                "PersonalWakeWordVerifier.swift",
+                "WakeWordDecisionGate.swift",
+                "WakeWordDetector.swift",
+                "WakeWordTranscriptMatcher.swift"
             ]
         ),
         .executableTarget(

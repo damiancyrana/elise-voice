@@ -19,9 +19,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-	<string>1.6.0</string>
+	<string>1.7.0</string>
     <key>CFBundleVersion</key>
-	<string>13</string>
+	<string>16</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>LSApplicationCategoryType</key>
@@ -29,6 +29,6 @@
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Elise Voice używa mikrofonu lokalnie do wykrywania hasła „ELISE” i zamiany Twojej mowy na tekst.</string>
+	<string>Elise Voice używa mikrofonu lokalnie do zamiany mowy na tekst po naciśnięciu skrótu ⌥Space.</string>
 </dict>
 </plist>

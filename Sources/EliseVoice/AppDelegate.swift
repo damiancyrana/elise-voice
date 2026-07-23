@@ -5,10 +5,11 @@ import Carbon.HIToolbox
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var statusMenuItem: NSMenuItem?
-    private var voiceWakeMenuItem: NSMenuItem?
     private var coordinator: DictationCoordinator?
     private var hotKey: GlobalHotKey?
     private var recordingWindow: RecordingWindowController?
+    private var hotKeyLifecycleObservers: [NSObjectProtocol] = []
+    private var hotKeyRefreshTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureStatusItem()
@@ -22,7 +23,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             recordingWindow?.updateAudio(level: level, silenceRemaining: silenceRemaining)
         }
         self.coordinator = coordinator
-        voiceWakeMenuItem?.state = coordinator.voiceWakeEnabled ? .on : .off
 
         do {
             hotKey = try GlobalHotKey(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey)) {
@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             render(.failed("Nie można zarejestrować skrótu ⌥Space"))
             return
         }
+        installHotKeyLifecycleObservers()
 
         Task {
             await coordinator.prepare()
@@ -47,6 +48,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        hotKeyRefreshTask?.cancel()
+        hotKeyLifecycleObservers.forEach {
+            NSWorkspace.shared.notificationCenter.removeObserver($0)
+        }
+        hotKeyLifecycleObservers.removeAll()
         coordinator?.cancel()
     }
 
@@ -70,21 +76,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let status = NSMenuItem(title: "Uruchamianie…", action: nil, keyEquivalent: "")
         status.isEnabled = false
         menu.addItem(status)
-        menu.addItem(.separator())
-
-        let voiceWake = NSMenuItem(
-            title: "Wybudzanie głosem „ELISE” — sesja 30 min",
-            action: #selector(toggleVoiceWake(_:)),
-            keyEquivalent: ""
-        )
-        voiceWake.target = self
-        let defaults = UserDefaults.standard
-        voiceWake.state = defaults.object(forKey: DictationCoordinator.voiceWakePreferenceKey) == nil
-            || defaults.bool(forKey: DictationCoordinator.voiceWakePreferenceKey)
-            ? .on
-            : .off
-        menu.addItem(voiceWake)
-        voiceWakeMenuItem = voiceWake
         menu.addItem(.separator())
 
         let microphoneSettings = NSMenuItem(
@@ -120,12 +111,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         PermissionSettings.openMicrophone()
     }
 
-    @objc private func toggleVoiceWake(_ sender: NSMenuItem) {
-        let enabled = sender.state != .on
-        sender.state = enabled ? .on : .off
-        coordinator?.setVoiceWakeEnabled(enabled)
-    }
-
     @objc private func openAccessibilitySettings() {
         PermissionSettings.openAccessibility()
     }
@@ -138,6 +123,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             systemSymbolName: state.symbolName,
             accessibilityDescription: state.description
         )
+    }
+
+    private func installHotKeyLifecycleObservers() {
+        let notificationCenter = NSWorkspace.shared.notificationCenter
+        let notifications: [Notification.Name] = [
+            NSWorkspace.didWakeNotification,
+            NSWorkspace.sessionDidBecomeActiveNotification
+        ]
+        for name in notifications {
+            hotKeyLifecycleObservers.append(notificationCenter.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.scheduleHotKeyRegistrationRefresh() }
+            })
+        }
+    }
+
+    private func scheduleHotKeyRegistrationRefresh() {
+        hotKeyRefreshTask?.cancel()
+        hotKeyRefreshTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled, let self, let hotKey else { return }
+            do {
+                try hotKey.refreshRegistration()
+            } catch {
+                render(.failed("Nie można odnowić skrótu ⌥Space"))
+            }
+        }
     }
 }
 

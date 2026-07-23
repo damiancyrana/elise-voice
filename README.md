@@ -1,29 +1,31 @@
 # Elise Voice
 
-Wersja 1.6.0 — lokalne dyktowanie po polsku na macOS.
+Wersja 1.7.0 — lokalne dyktowanie po polsku na macOS, uruchamiane wyłącznie
+skrótem klawiszowym.
 
 ## Działanie
 
-- Po uruchomieniu aplikacji mikrofon pozostaje wyłączony.
-- Pierwsze `⌥Space` rozpoczyna nagrywanie i uzbraja głosowe wybudzanie na
-  30-minutową sesję pracy.
-- W aktywnej sesji wypowiedzenie „ELISE” — jako „ILIS”, „ILIZ” lub „ELAJS” —
-  również rozpoczyna nagrywanie.
-- Aktywność klawiatury, myszy albo użycie Elise utrzymuje sesję. Po 30 minutach
-  rzeczywistej bezczynności mikrofon wyłącza się; kolejne `⌥Space` rozpoczyna
-  nową sesję.
-- Krótki dwutonowy sygnał potwierdza gotowość — mów od razu po jego zakończeniu.
+- `⌥Space` rozpoczyna nagrywanie.
+- Krótki dwutonowy sygnał potwierdza gotowość; należy mówić po jego zakończeniu.
 - Ponowne `⌥Space` kończy nagrywanie natychmiast.
 - 20 sekund ciągłej ciszy kończy nagrywanie automatycznie.
-- Jeśli po wywołaniu nie padnie żaden tekst, aplikacja niczego nie transkrybuje
+- Jeśli nie padnie intencjonalna wypowiedź, aplikacja niczego nie transkrybuje
   ani nie wkleja.
-- Rozpoznany tekst jest wklejany do aktywnego pola tekstowego.
-- Recording Window rozwija się spod fizycznego notcha, pokazuje liniową sylwetkę
-  Elise i modulację głosu, nie zabierając fokusu z aktualnej aplikacji.
-- Aplikacja jest obecna w Docku i rejestruje się jako element uruchamiany przy
-  logowaniu.
-- W menu aplikacji można całkowicie wyłączyć „Wybudzanie głosem ELISE”. Wtedy
-  `⌥Space` nadal dyktuje, ale po zakończeniu mikrofon natychmiast się wyłącza.
+- Rozpoznany tekst jest wklejany do pola aktywnego w chwili rozpoczęcia
+  dyktowania.
+- Recording Window rozwija się spod fizycznego notcha i nie zabiera fokusu z
+  aktualnej aplikacji.
+- Aplikacja rejestruje się jako element uruchamiany przy logowaniu.
+
+Mikrofon jest wyłączony po uruchomieniu aplikacji, podczas oczekiwania i podczas
+transkrypcji. Włącza go tylko `⌥Space`, a po zakończeniu dyktowania strumień jest
+zatrzymywany. Dźwięk otoczenia, mowa ani audio odtwarzane przez komputer nie są
+zdarzeniami sterującymi.
+
+Tryb aktywacji głosowej został usunięty z wersji produkcyjnej. Modele
+`EliseWakeWord` i `ElisePersonalWakeVerifier` nie są ładowane ani pakowane w
+aplikacji. Powody tej decyzji i wyniki diagnozy opisuje
+[PROBLEMS.md](PROBLEMS.md).
 
 Elise Voice nie ma konta, chmury, historii nagrań ani edytora. Język
 transkrypcji jest zawsze ustawiony na polski.
@@ -32,36 +34,20 @@ Dokumentacja techniczna:
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — komponenty, przepływy i granice systemu,
 - [PROBLEMS.md](PROBLEMS.md) — napotkane problemy i podjęte decyzje,
-- [KNOW_HOW.md](KNOW_HOW.md) — budowanie, testowanie, kalibracja i wydanie.
+- [KNOW_HOW.md](KNOW_HOW.md) — budowanie, testowanie i wydanie.
 
-## Modele i wydajność
+## Model i wydajność
 
-Końcową transkrypcję wykonuje 4-bitowo skompresowany `Whisper Large v3`:
+Jedynym modelem używanym przez aplikację jest 4-bitowo skompresowany Whisper
+Large v3:
 `argmaxinc/whisperkit-coreml/openai_whisper-large-v3-v20240930_626MB`.
+Pracuje lokalnie przez WhisperKit i wykonuje inferencję dopiero po zakończeniu
+nagrywania. Dłuższe nagrania są dzielone przez VAD na okna i składane w jeden
+tekst.
 
-Hasło aktywujące wykrywa dedykowany, kilkukilobajtowy klasyfikator Core ML
-`EliseWakeWord`, wytrenowany dla wymowy ILIS, ILIZ i ELAJS z trudnymi próbkami
-negatywnymi. Pierwsza decyzja wymaga dwóch zgodnych okien, więc pojedynczy
-głośny pik nie wywoła dyktowania. Rzadki kandydat jest dodatkowo
-potwierdzany na 2,4-sekundowym buforze przez drugi model Core ML wytrenowany na
-głosie właściciela. Aplikacja odnajduje w tym buforze ostatnią wypowiedź,
-wyrównuje ją do identycznego jednosekundowego okna jak podczas kalibracji i
-dopiero wtedy ocenia. Jeśli nie rozstrzygnie, zapasowym weryfikatorem jest już
-załadowany Large v3. Zwykłe „Lis”, „Elisa” czy przypadkowy hałas nie otwierają Recording Window. Core ML
-korzysta z Audio Feature Print i dostępnych jednostek CPU, GPU oraz Apple
-Neural Engine. Dłuższe nagrania są dzielone przez VAD na okna i składane w
-jeden tekst.
-
-Mikrofon działa jako jeden współdzielony strumień 16 kHz. Nie uruchamia się
-automatycznie razem z aplikacją. `⌥Space` uzbraja nasłuch, a aktywność
-klawiatury, myszy lub Elise podtrzymuje sesję. W aktywnej sesji strumień musi nasłuchiwać w
-stanie gotowości, ale audio nie jest zapisywane. Po bezczynności, blokadzie albo
-uśpieniu strumień jest zatrzymywany. W RAM istnieje wyłącznie nadpisywany, trzysekundowy bufor
-potrzebny do potwierdzenia hasła. Tania bramka energii z pre-roll uruchamia pełny klasyfikator
-tylko wokół mowy. Mikrofon wyłącza się także podczas transkrypcji i krótkiego
-odzyskiwania po błędzie; po zmianie urządzenia audio strumień jest bezpiecznie
-odbudowywany wyłącznie wtedy, gdy sesja nadal jest aktywna. Nagranie dyktowania
-istnieje tylko w RAM i jest zwalniane po transkrypcji.
+Nagranie dyktowania istnieje wyłącznie w RAM i jest zwalniane po
+transkrypcji. Nie istnieje bufor ciągłego nasłuchu ani automatyczne uczenie na
+głosie użytkownika.
 
 ## Instalacja
 
@@ -75,53 +61,39 @@ chmod +x scripts/*.sh
 
 Przy pierwszym uruchomieniu macOS poprosi o:
 
-1. dostęp do mikrofonu (pozycja pojawia się w ustawieniach po pierwszej prośbie),
-2. dostęp w **Prywatność i ochrona → Dostępność**, potrzebny do wysłania `⌘V`,
-3. ewentualne zatwierdzenie w **Ogólne → Elementy logowania**, jeśli wymaga tego
-   konfiguracja systemu.
+1. dostęp do mikrofonu, potrzebny do dyktowania po `⌥Space`,
+2. dostęp w **Prywatność i ochrona → Dostępność**, potrzebny do wklejania,
+3. ewentualne zatwierdzenie w **Ogólne → Elementy logowania**.
 
-Po każdym uruchomieniu napis `START` oznacza ładowanie lokalnych modeli. Gdy
-zniknie, aplikacja jest gotowa. Przy kolejnych wywołaniach dyktowania wystarczy
-poczekać na krótki sygnał dźwiękowy; nagrywanie rozpoczyna się na jego końcu.
+Po uruchomieniu napis `START` oznacza ładowanie lokalnego modelu transkrypcji.
+Gdy zniknie, aplikacja jest gotowa.
 
 ## Kontrole
 
 ```bash
-./scripts/check.sh                 # kompilacja i metadane
-./scripts/check-wake-word.sh       # ILIS, ILIZ, ELAJS oraz próbka negatywna
-./scripts/check-personal-wake-verifier.sh # wszystkie 54 próbki właściciela
-./scripts/check-wake-verifier.sh   # drugi etap: hasła kontra Lis/Elisa
+./scripts/check.sh                 # kompilacja, polityki i metadane
 ./scripts/check-long-dictation.sh  # polskie nagranie dłuższe niż minuta
 ./scripts/check-production.sh      # pełna kontrola pakietu wydania
 ./scripts/benchmark-asr.sh         # porównanie 1–4 workerów WhisperKit
 ```
 
-Własny klasyfikator hasła można odtworzyć poleceniem
-`./scripts/train-wake-word.sh`. `./scripts/capture-personal-wake-word.sh`
-zbiera lokalny zestaw ILIS/ILIZ/ELAJS konkretnego użytkownika; kolejne
-uruchomienie treningu włącza go automatycznie. Nagrania pozostają w `.build` i
-nie są kopiowane do aplikacji. Do personalizacji należy używać próbek mówionych
-bezpośrednio do mikrofonu — ponowne odtwarzanie przez głośnik dodaje akustykę
-pomieszczenia i nie reprezentuje normalnego użycia. Publiczną paczkę Developer ID buduje się po
-ustawieniu `ELISE_SIGN_IDENTITY`, a `scripts/notarize.sh` wymusza produkcyjny
-podpis, wysyła pakiet przez profil `ELISE_NOTARY_PROFILE` i stapluje ticket.
+Brama produkcyjna sprawdza również, że pakiet nie zawiera modeli aktywacji
+głosowej. Stare skrypty eksperymentalne do treningu mogą pozostać w repozytorium
+jako materiał badawczy, ale nie należą do procesu wydania i nie są wykonywane
+przez aplikację.
 
-Prowadzoną kalibrację uruchamia `./scripts/run-personal-calibration.sh`.
-Zapisuje ona 24 hasła i 30 trudnych negatywów (około 1,7 MB). Dane nie są
-zbierane z dyktowania ani w tle. Trening tworzy osobny osobisty weryfikator;
-próbki można usunąć po zakończeniu testów, jeżeli nie będą potrzebne do
-późniejszego odtworzenia modelu.
+Publiczną paczkę Developer ID buduje się po ustawieniu
+`ELISE_SIGN_IDENTITY`; `scripts/notarize.sh` wymusza produkcyjny podpis, wysyła
+pakiet przez profil `ELISE_NOTARY_PROFILE` i stapluje ticket.
 
 ## Przepływ danych
 
 ```text
-⌥Space → aktywna sesja 30 min
-       ↓
-Core ML ELISE lub kolejne ⌥Space
-            ↓
-      strumień 16 kHz
-       ↓
-20 s ciszy lub ponowne ⌥Space
-       ↓
-Whisper Large v3 (pl, Core ML) → schowek → ⌘V
+⌥Space → mikrofon 16 kHz → nagrywanie
+                              ↓
+             ⌥Space / 20 s ciszy / limit 5 min
+                              ↓
+              mikrofon wyłączony → Whisper Large v3 (pl)
+                              ↓
+                         schowek → ⌘V
 ```

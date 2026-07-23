@@ -84,60 +84,6 @@ public actor TranscriptionService {
         return TranscriptFormatter.join(results.map { $0.text })
     }
 
-    /// Confirms a candidate proposed by the tiny keyword classifier. This is
-    /// intentionally invoked only for candidates, never continuously.
-    public func verifyWakeWord(samples: [Float]) async throws -> Bool {
-        guard let whisperKit else {
-            throw TranscriptionError.modelNotReady
-        }
-        guard !samples.isEmpty else { return false }
-
-        let startedAt = ProcessInfo.processInfo.systemUptime
-        let signpostID = PerformanceDiagnostics.signposter.makeSignpostID()
-        let signpostState = PerformanceDiagnostics.signposter.beginInterval(
-            "Verify wake word",
-            id: signpostID,
-            "samples=\(samples.count, privacy: .public)"
-        )
-        defer {
-            PerformanceDiagnostics.signposter.endInterval(
-                "Verify wake word",
-                signpostState
-            )
-        }
-
-        let results = try await whisperKit.transcribe(
-            audioArray: samples,
-            decodeOptions: wakeWordDecodingOptions
-        )
-        let accepted = WakeWordTranscriptMatcher.matches(
-            TranscriptFormatter.join(results.map { $0.text })
-        )
-        logger.info(
-            "Wake-word verification completed in \(ProcessInfo.processInfo.systemUptime - startedAt, format: .fixed(precision: 2)) seconds; accepted: \(accepted, privacy: .public)"
-        )
-        return accepted
-    }
-
-    public func verifyWakeWord(fileAt url: URL) async throws -> Bool {
-        WakeWordTranscriptMatcher.matches(
-            try await wakeWordTranscript(fileAt: url)
-        )
-    }
-
-    /// Developer-only calibration helper. The app itself never logs or
-    /// persists this text.
-    public func wakeWordTranscript(fileAt url: URL) async throws -> String {
-        guard let whisperKit else {
-            throw TranscriptionError.modelNotReady
-        }
-        let results = try await whisperKit.transcribe(
-            audioPath: url.path,
-            decodeOptions: wakeWordDecodingOptions
-        )
-        return TranscriptFormatter.join(results.map { $0.text })
-    }
-
     private var decodingOptions: DecodingOptions {
         DecodingOptions(
             verbose: false,
@@ -156,24 +102,6 @@ public actor TranscriptionService {
         )
     }
 
-    private var wakeWordDecodingOptions: DecodingOptions {
-        DecodingOptions(
-            verbose: false,
-            task: .transcribe,
-            language: "en",
-            temperature: 0,
-            temperatureFallbackCount: 1,
-            sampleLength: 24,
-            usePrefillPrompt: true,
-            detectLanguage: false,
-            skipSpecialTokens: true,
-            withoutTimestamps: true,
-            wordTimestamps: false,
-            suppressBlank: true,
-            concurrentWorkerCount: 1,
-            chunkingStrategy: ChunkingStrategy.none
-        )
-    }
 }
 
 public enum TranscriptionError: LocalizedError {

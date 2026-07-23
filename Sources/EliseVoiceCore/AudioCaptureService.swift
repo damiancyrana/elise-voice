@@ -49,7 +49,6 @@ public final class AudioCaptureService: @unchecked Sendable {
     private var streamGeneration: UInt64 = 0
     private var audioEngine: AVAudioEngine?
     private var configurationObserver: NSObjectProtocol?
-    private var attachedWakeWordDetector: WakeWordDetector?
 
     public var configurationChangeHandler: (@Sendable () -> Void)?
 
@@ -75,7 +74,7 @@ public final class AudioCaptureService: @unchecked Sendable {
     }
 
     @MainActor
-    public func startMonitoring(wakeWordDetector: WakeWordDetector? = nil) throws {
+    public func startMonitoring() throws {
         let signpostID = PerformanceDiagnostics.signposter.makeSignpostID()
         let signpostState = PerformanceDiagnostics.signposter.beginInterval(
             "Start microphone",
@@ -87,11 +86,7 @@ public final class AudioCaptureService: @unchecked Sendable {
                 signpostState
             )
         }
-        if audioEngine?.isRunning == true,
-           attachedWakeWordDetector === wakeWordDetector {
-            wakeWordDetector?.setEnabled(true)
-            return
-        }
+        if audioEngine?.isRunning == true { return }
         stopMonitoring()
 
         let engine = AVAudioEngine()
@@ -125,10 +120,6 @@ public final class AudioCaptureService: @unchecked Sendable {
             throw AudioCaptureError.microphoneUnavailable
         }
 
-        try wakeWordDetector?.start(format: desiredFormat)
-        wakeWordDetector?.setEnabled(true)
-        attachedWakeWordDetector = wakeWordDetector
-
         generationLock.lock()
         streamGeneration &+= 1
         let generation = streamGeneration
@@ -137,9 +128,7 @@ public final class AudioCaptureService: @unchecked Sendable {
 
         let store = self.store
         let processingQueue = self.processingQueue
-        let detector = wakeWordDetector
         let service = self
-        let wakeFrameClock = AudioFrameClock()
 
         let tapHandler: @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void = { buffer, _ in
             // AVAudioEngine owns `buffer`, so it cannot escape this callback.
@@ -158,13 +147,7 @@ public final class AudioCaptureService: @unchecked Sendable {
                         capturedBuffer,
                         with: converter
                     )
-                    let position = wakeFrameClock.next(frameLength: converted.frameLength)
-                    let hasAcousticActivity = store.append(converted)
-                    detector?.analyze(
-                        converted,
-                        at: position,
-                        hasAcousticActivity: hasAcousticActivity
-                    )
+                    store.append(converted)
                 } catch {
                     store.markDroppedBuffer()
                 }
@@ -194,15 +177,8 @@ public final class AudioCaptureService: @unchecked Sendable {
             )
         } catch {
             inputNode.removeTap(onBus: 0)
-            wakeWordDetector?.stop()
-            attachedWakeWordDetector = nil
             throw error
         }
-    }
-
-    @MainActor
-    public func setWakeWordAnalysisEnabled(_ enabled: Bool) {
-        attachedWakeWordDetector?.setEnabled(enabled)
     }
 
     @MainActor
@@ -215,9 +191,6 @@ public final class AudioCaptureService: @unchecked Sendable {
             NotificationCenter.default.removeObserver(configurationObserver)
             self.configurationObserver = nil
         }
-        attachedWakeWordDetector?.stop()
-        attachedWakeWordDetector = nil
-
         guard let audioEngine else { return }
         audioEngine.inputNode.removeTap(onBus: 0)
         audioEngine.stop()
@@ -229,11 +202,6 @@ public final class AudioCaptureService: @unchecked Sendable {
     @MainActor
     public var isMonitoring: Bool {
         audioEngine?.isRunning == true
-    }
-
-    @MainActor
-    public var hasWakeWordDetectorAttached: Bool {
-        attachedWakeWordDetector != nil
     }
 
     public func isStreamHealthy(maximumStall: TimeInterval = 3) -> Bool {
@@ -264,12 +232,6 @@ public final class AudioCaptureService: @unchecked Sendable {
 
     public func droppedBufferCount() -> UInt64 {
         store.droppedBufferCount()
-    }
-
-    /// Returns an in-memory snapshot for second-stage wake-word verification.
-    /// The rolling buffer is bounded and is never persisted.
-    public func recentMonitoringAudio(duration: TimeInterval = 2.4) -> [Float] {
-        store.recentAudio(duration: duration)
     }
 
     private func isCurrentGeneration(_ generation: UInt64) -> Bool {
@@ -349,19 +311,6 @@ private final class RealtimeAudioBufferPool: @unchecked Sendable {
     }
 }
 
-private final class AudioFrameClock: @unchecked Sendable {
-    private let lock = NSLock()
-    private var position: AVAudioFramePosition = 0
-
-    func next(frameLength: AVAudioFrameCount) -> AVAudioFramePosition {
-        lock.lock()
-        defer { lock.unlock() }
-        let current = position
-        position += AVAudioFramePosition(frameLength)
-        return current
-    }
-}
-
 private final class AudioBufferStore: @unchecked Sendable {
     private final class RecordingBuffer {
         var samples: [Float]
@@ -388,22 +337,19 @@ private final class AudioBufferStore: @unchecked Sendable {
 
     private let lock = NSLock()
     private let sampleRate: Int
-    private let recentAudioBuffer: RollingAudioBuffer
     private var state = State()
 
     init(sampleRate: Int) {
         self.sampleRate = sampleRate
-        recentAudioBuffer = RollingAudioBuffer(capacity: sampleRate * 3)
     }
 
-    @discardableResult
-    func append(_ buffer: AVAudioPCMBuffer) -> Bool {
+    func append(_ buffer: AVAudioPCMBuffer) {
         guard
             buffer.format.commonFormat == .pcmFormatFloat32,
             let channel = buffer.floatChannelData?.pointee
-        else { return false }
+        else { return }
         let sampleCount = Int(buffer.frameLength)
-        guard sampleCount > 0 else { return false }
+        guard sampleCount > 0 else { return }
         let samples = UnsafeBufferPointer(start: channel, count: sampleCount)
 
         var meanSquare: Float = 0
@@ -414,7 +360,6 @@ private final class AudioBufferStore: @unchecked Sendable {
 
         lock.lock()
         state.lastAudioUptime = ProcessInfo.processInfo.systemUptime
-        recentAudioBuffer.append(samples)
 
         let isInitialCalibration = state.totalSamples < UInt64(sampleRate * 2)
         let resemblesBackground = decibels < state.noiseFloorDecibels + 8
@@ -427,9 +372,9 @@ private final class AudioBufferStore: @unchecked Sendable {
             state.noiseFloorDecibels = sortedLevels[sortedLevels.count / 5]
         } else if state.recording == nil {
             // A microphone/input-gain change can move the entire room floor
-            // above the old threshold. Rise slowly enough that a short wake
-            // phrase remains active, but converge on sustained HVAC, traffic
-            // or fan noise instead of running Core ML indefinitely.
+            // above the old threshold. Rise slowly enough to preserve the
+            // beginning of speech, but converge on sustained HVAC, traffic or
+            // fan noise.
             let bufferDuration = Float(sampleCount) / Float(sampleRate)
             let maximumRise = 1.2 * bufferDuration
             let targetFloor = decibels - 5
@@ -441,10 +386,6 @@ private final class AudioBufferStore: @unchecked Sendable {
 
         let speechThreshold = min(max(state.noiseFloorDecibels + 9, -50), -27)
         let containsSpeech = decibels > speechThreshold
-        // This intentionally uses a more permissive threshold than dictation
-        // VAD. It gates expensive keyword inference, not keyword acceptance.
-        let wakeActivityThreshold = min(max(state.noiseFloorDecibels + 5, -55), -34)
-        let hasWakeWordActivity = decibels > wakeActivityThreshold
         state.smoothedLevel = (state.smoothedLevel * 0.72) + (normalizedLevel * 0.28)
         state.totalSamples += UInt64(sampleCount)
 
@@ -476,11 +417,15 @@ private final class AudioBufferStore: @unchecked Sendable {
             }
         }
         lock.unlock()
-        return hasWakeWordActivity
     }
 
     func markStreamStarted() {
         lock.lock()
+        // Recalibrate the ambient floor for the current input route.
+        state.totalSamples = 0
+        state.smoothedLevel = 0
+        state.recentDecibels.removeAll(keepingCapacity: true)
+        state.noiseFloorDecibels = -60
         state.lastAudioUptime = ProcessInfo.processInfo.systemUptime
         lock.unlock()
     }
@@ -569,83 +514,4 @@ private final class AudioBufferStore: @unchecked Sendable {
         return state.droppedBuffers
     }
 
-    func recentAudio(duration: TimeInterval) -> [Float] {
-        lock.lock()
-        defer { lock.unlock() }
-        let requestedSamples = min(
-            max(Int(duration * Double(sampleRate)), 0),
-            recentAudioBuffer.capacity
-        )
-        return recentAudioBuffer.suffix(count: requestedSamples)
-    }
-}
-
-/// Fixed-size circular sample storage. This avoids shifting a growing Array on
-/// every microphone callback while keeping enough context to verify a wake
-/// candidate with the already-loaded transcription model.
-private final class RollingAudioBuffer {
-    let capacity: Int
-    private var storage: [Float]
-    private var writeIndex = 0
-    private var storedCount = 0
-
-    init(capacity: Int) {
-        self.capacity = max(capacity, 1)
-        storage = [Float](repeating: 0, count: self.capacity)
-    }
-
-    func append(_ samples: UnsafeBufferPointer<Float>) {
-        guard !samples.isEmpty else { return }
-        if samples.count >= capacity {
-            storage.withUnsafeMutableBufferPointer { destination in
-                destination.baseAddress!.update(
-                    from: samples.baseAddress!.advanced(by: samples.count - capacity),
-                    count: capacity
-                )
-            }
-            writeIndex = 0
-            storedCount = capacity
-            return
-        }
-
-        let firstCount = min(samples.count, capacity - writeIndex)
-        storage.withUnsafeMutableBufferPointer { destination in
-            destination.baseAddress!
-                .advanced(by: writeIndex)
-                .update(from: samples.baseAddress!, count: firstCount)
-            let remainder = samples.count - firstCount
-            if remainder > 0 {
-                destination.baseAddress!.update(
-                    from: samples.baseAddress!.advanced(by: firstCount),
-                    count: remainder
-                )
-            }
-        }
-        writeIndex = (writeIndex + samples.count) % capacity
-        storedCount = min(storedCount + samples.count, capacity)
-    }
-
-    func suffix(count requestedCount: Int) -> [Float] {
-        let count = min(max(requestedCount, 0), storedCount)
-        guard count > 0 else { return [] }
-        var result = [Float](repeating: 0, count: count)
-        let start = (writeIndex - count + capacity) % capacity
-        let firstCount = min(count, capacity - start)
-        result.withUnsafeMutableBufferPointer { destination in
-            storage.withUnsafeBufferPointer { source in
-                destination.baseAddress!.update(
-                    from: source.baseAddress!.advanced(by: start),
-                    count: firstCount
-                )
-                let remainder = count - firstCount
-                if remainder > 0 {
-                    destination.baseAddress!.advanced(by: firstCount).update(
-                        from: source.baseAddress!,
-                        count: remainder
-                    )
-                }
-            }
-        }
-        return result
-    }
 }

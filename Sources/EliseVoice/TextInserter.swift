@@ -31,8 +31,9 @@ enum TextInserterError: LocalizedError {
 }
 
 struct TextInsertionTarget: @unchecked Sendable {
-    fileprivate let processIdentifier: pid_t
-    fileprivate let element: AXUIElement
+    fileprivate let frontmostApplicationPID: pid_t
+    fileprivate let focusedElement: AXUIElement?
+    fileprivate let focusedWindow: AXUIElement?
 }
 
 @MainActor
@@ -55,15 +56,33 @@ enum TextInserter {
         guard AXIsProcessTrusted() else {
             throw TextInserterError.accessibilityPermissionMissing
         }
-        guard let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier,
-              let element = focusedElement(),
-              processIdentifier(of: element) == frontmostPID else {
+        guard let frontmostApplication = NSWorkspace.shared.frontmostApplication else {
             throw TextInserterError.noFocusedTextField
         }
-        guard !isSecureTextField(element) else {
-            throw TextInserterError.secureTextField
+        let frontmostPID = frontmostApplication.processIdentifier
+
+        if let element = focusedElement(for: frontmostPID) {
+            guard !isSecureTextField(element) else {
+                throw TextInserterError.secureTextField
+            }
+            return TextInsertionTarget(
+                frontmostApplicationPID: frontmostPID,
+                focusedElement: element,
+                focusedWindow: nil
+            )
         }
-        return TextInsertionTarget(processIdentifier: frontmostPID, element: element)
+
+        guard TextInsertionPolicy.allowsBrowserWindowFallback(
+            bundleIdentifier: frontmostApplication.bundleIdentifier
+        ), let window = focusedWindow(for: frontmostPID) else {
+            throw TextInserterError.noFocusedTextField
+        }
+
+        return TextInsertionTarget(
+            frontmostApplicationPID: frontmostPID,
+            focusedElement: nil,
+            focusedWindow: window
+        )
     }
 
     static func paste(_ text: String, into target: TextInsertionTarget) async throws {
@@ -81,7 +100,7 @@ enum TextInserter {
         guard AXIsProcessTrusted() else {
             throw TextInserterError.accessibilityPermissionMissing
         }
-        guard !isSecureTextField(target.element) else {
+        if let element = target.focusedElement, isSecureTextField(element) {
             throw TextInserterError.secureTextField
         }
         guard targetIsStillFocused(target) else {
@@ -89,46 +108,46 @@ enum TextInserter {
             throw TextInserterError.targetChanged
         }
 
-        let previousValue = stringAttribute(
-            kAXValueAttribute as CFString,
-            of: target.element
-        )
-        let previousSelection = stringAttribute(
-            kAXSelectedTextAttribute as CFString,
-            of: target.element
-        ) ?? ""
-        var isSettable: DarwinBoolean = false
-        let settableStatus = AXUIElementIsAttributeSettable(
-            target.element,
-            kAXSelectedTextAttribute as CFString,
-            &isSettable
-        )
-        if settableStatus == .success, isSettable.boolValue {
-            let status = AXUIElementSetAttributeValue(
-                target.element,
-                kAXSelectedTextAttribute as CFString,
-                text as CFTypeRef
+        if let element = target.focusedElement {
+            let previousValue = stringAttribute(
+                kAXValueAttribute as CFString,
+                of: element
             )
-            if status == .success {
-                // Some applications report AX success without applying the
-                // mutation. Verify it whenever the element exposes its text.
-                try? await Task.sleep(for: .milliseconds(25))
-                let insertionWasApplied = previousValue == nil || stringAttribute(
-                    kAXValueAttribute as CFString,
-                    of: target.element
-                ).map { newValue in
-                    TextInsertionPolicy.directInsertionWasApplied(
-                        previousValue: previousValue ?? "",
-                        previousSelection: previousSelection,
-                        newValue: newValue,
-                        insertedText: text
-                    )
-                } == true
-                if insertionWasApplied {
-                    logger.info("Transcript inserted through Accessibility API")
-                    return
+            let previousSelection = stringAttribute(
+                kAXSelectedTextAttribute as CFString,
+                of: element
+            ) ?? ""
+            var isSettable: DarwinBoolean = false
+            let settableStatus = AXUIElementIsAttributeSettable(
+                element,
+                kAXSelectedTextAttribute as CFString,
+                &isSettable
+            )
+            if settableStatus == .success, isSettable.boolValue {
+                let status = AXUIElementSetAttributeValue(
+                    element,
+                    kAXSelectedTextAttribute as CFString,
+                    text as CFTypeRef
+                )
+                if status == .success {
+                    try? await Task.sleep(for: .milliseconds(25))
+                    let insertionWasApplied = previousValue == nil || stringAttribute(
+                        kAXValueAttribute as CFString,
+                        of: element
+                    ).map { newValue in
+                        TextInsertionPolicy.directInsertionWasApplied(
+                            previousValue: previousValue ?? "",
+                            previousSelection: previousSelection,
+                            newValue: newValue,
+                            insertedText: text
+                        )
+                    } == true
+                    if insertionWasApplied {
+                        logger.info("Transcript inserted through Accessibility API")
+                        return
+                    }
+                    logger.notice("Accessibility API reported success without changing text; using clipboard fallback")
                 }
-                logger.notice("Accessibility API reported success without changing text; using clipboard fallback")
             }
         }
 
@@ -177,30 +196,110 @@ enum TextInserter {
     }
 
     private static func targetIsStillFocused(_ target: TextInsertionTarget) -> Bool {
-        guard
-            NSWorkspace.shared.frontmostApplication?.processIdentifier == target.processIdentifier,
-            let current = focusedElement(),
-            processIdentifier(of: current) == target.processIdentifier
-        else { return false }
-        return CFEqual(current, target.element)
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier
+            == target.frontmostApplicationPID else {
+            return false
+        }
+
+        if let element = target.focusedElement {
+            guard let current = focusedElement(for: target.frontmostApplicationPID) else {
+                return false
+            }
+            return TextInsertionPolicy.targetIsStillFocused(
+                frontmostApplicationPID: target.frontmostApplicationPID,
+                targetApplicationPID: target.frontmostApplicationPID,
+                isFocusedElementEqual: CFEqual(current, element)
+            )
+        }
+
+        guard let window = target.focusedWindow,
+              let current = focusedWindow(for: target.frontmostApplicationPID) else {
+            return false
+        }
+        return TextInsertionPolicy.targetIsStillFocused(
+            frontmostApplicationPID: target.frontmostApplicationPID,
+            targetApplicationPID: target.frontmostApplicationPID,
+            isFocusedElementEqual: CFEqual(current, window)
+        )
     }
 
-    private static func focusedElement() -> AXUIElement? {
+    private static func focusedElement(for processIdentifier: pid_t) -> AXUIElement? {
         let systemWide = AXUIElementCreateSystemWide()
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            systemWide,
+        if let element = elementAttribute(
             kAXFocusedUIElementAttribute as CFString,
-            &value
-        ) == .success else { return nil }
-        guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+            of: systemWide
+        ) {
+            return element
+        }
+
+        let application = AXUIElementCreateApplication(processIdentifier)
+        if let element = elementAttribute(
+            kAXFocusedUIElementAttribute as CFString,
+            of: application
+        ) {
+            return element
+        }
+        guard let window = focusedWindow(for: processIdentifier) else {
+            return nil
+        }
+        return focusedDescendant(of: window)
+    }
+
+    private static func focusedWindow(for processIdentifier: pid_t) -> AXUIElement? {
+        elementAttribute(
+            kAXFocusedWindowAttribute as CFString,
+            of: AXUIElementCreateApplication(processIdentifier)
+        )
+    }
+
+    private static func elementAttribute(
+        _ attribute: CFString,
+        of element: AXUIElement
+    ) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+              let value,
+              CFGetTypeID(value) == AXUIElementGetTypeID() else {
+            return nil
+        }
         return unsafeDowncast(value, to: AXUIElement.self)
     }
 
-    private static func processIdentifier(of element: AXUIElement) -> pid_t? {
-        var identifier: pid_t = 0
-        guard AXUIElementGetPid(element, &identifier) == .success else { return nil }
-        return identifier
+    private static func focusedDescendant(of root: AXUIElement) -> AXUIElement? {
+        var elements = childElements(of: root)
+        var inspectedElementCount = 0
+
+        while let element = elements.popLast(), inspectedElementCount < 4_096 {
+            inspectedElementCount += 1
+            if booleanAttribute(kAXFocusedAttribute as CFString, of: element) {
+                return element
+            }
+            elements.append(contentsOf: childElements(of: element))
+        }
+        return nil
+    }
+
+    private static func childElements(of element: AXUIElement) -> [AXUIElement] {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            kAXChildrenAttribute as CFString,
+            &value
+        ) == .success else {
+            return []
+        }
+        return value as? [AXUIElement] ?? []
+    }
+
+    private static func booleanAttribute(
+        _ attribute: CFString,
+        of element: AXUIElement
+    ) -> Bool {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
+            return false
+        }
+        return value as? Bool ?? false
     }
 
     private static func stringAttribute(
