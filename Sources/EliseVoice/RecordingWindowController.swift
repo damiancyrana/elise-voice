@@ -75,9 +75,15 @@ final class RecordingWindowController {
             model.level = 0
             model.silenceRemaining = nil
             show()
-        case let .failed(message):
+        case let .failed(message, showsPanel):
             model.phase = .failed
             model.errorMessage = message
+            guard showsPanel else {
+                // A repeating automatic retry reports through the menu bar icon
+                // only, instead of flashing the overlay on every attempt.
+                hide()
+                return
+            }
             show()
             delayedHide = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(7))

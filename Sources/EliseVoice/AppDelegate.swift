@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import EliseVoiceCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -10,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var recordingWindow: RecordingWindowController?
     private var hotKeyLifecycleObservers: [NSObjectProtocol] = []
     private var hotKeyRefreshTask: Task<Void, Never>?
+    private var hotKeyFailures = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureStatusItem()
@@ -78,6 +80,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(status)
         menu.addItem(.separator())
 
+        // A menu trigger keeps dictation reachable when the global shortcut is
+        // taken by another app and cannot be re-registered.
+        let toggleDictation = NSMenuItem(
+            title: "Rozpocznij lub zakończ dyktowanie",
+            action: #selector(toggleDictationFromMenu),
+            keyEquivalent: ""
+        )
+        toggleDictation.target = self
+        menu.addItem(toggleDictation)
+        menu.addItem(.separator())
+
         let microphoneSettings = NSMenuItem(
             title: "Ustawienia mikrofonu…",
             action: #selector(openMicrophoneSettings),
@@ -105,6 +118,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.menu = menu
         statusItem = item
         statusMenuItem = status
+    }
+
+    @objc private func toggleDictationFromMenu() {
+        Task { @MainActor [weak coordinator] in
+            await coordinator?.toggleDictation()
+        }
     }
 
     @objc private func openMicrophoneSettings() {
@@ -142,15 +161,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func scheduleHotKeyRegistrationRefresh() {
+    private func scheduleHotKeyRegistrationRefresh(after delay: TimeInterval = 0.5) {
         hotKeyRefreshTask?.cancel()
         hotKeyRefreshTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(500))
+            try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled, let self, let hotKey else { return }
             do {
                 try hotKey.refreshRegistration()
+                hotKeyFailures = 0
             } catch {
-                render(.failed("Nie można odnowić skrótu ⌥Space"))
+                // Re-registration unregisters first, so giving up here would
+                // leave the app without its only trigger until it is restarted.
+                hotKeyFailures += 1
+                let retryDelay = HotKeyRecoveryPolicy.retryDelay(
+                    afterFailureCount: hotKeyFailures
+                )
+                render(.failed(
+                    "Skrót ⌥Space jest zajęty — ponawiam za \(Int(retryDelay)) s",
+                    showsPanel: hotKeyFailures <= 2
+                ))
+                scheduleHotKeyRegistrationRefresh(after: retryDelay)
             }
         }
     }
@@ -167,7 +197,7 @@ private extension DictationState {
             "Nagrywanie \(Self.formattedDuration(elapsedSeconds)) — ⌥Space kończy"
         case .transcribing:
             "Przepisywanie…"
-        case let .failed(message):
+        case let .failed(message, _):
             message
         }
     }

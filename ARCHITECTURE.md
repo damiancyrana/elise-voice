@@ -15,6 +15,8 @@ zatrzymywany przed uruchomieniem transkrypcji.
 
 1. `GlobalHotKey` rejestruje `⌥Space` bez przejmowania fokusu i odnawia
    rejestrację po wybudzeniu systemu lub przywróceniu sesji użytkownika.
+   Nieudane odnowienie jest ponawiane z narastającym opóźnieniem, a menu
+   zawiera niezależny od Carbona wyzwalacz dyktowania.
 2. `DictationCoordinator` jest maszyną stanów i jedynym właścicielem cyklu
    mikrofonu. Uruchamia strumień wyłącznie przy przejściu z `ready` do
    `recording`, a zatrzymuje go przed `transcribing`, po błędzie, uśpieniu lub
@@ -34,8 +36,10 @@ zatrzymywany przed uruchomieniem transkrypcji.
    transkrypcja ma watchdog i jednorazową odbudowę modelu.
 5. `RecordingWindowController` wyświetla nieaktywujący panel SwiftUI/AppKit pod
    notchem. `TimelineView` istnieje wyłącznie podczas widocznej animacji.
-6. `TextInserter` zapamiętuje aktywną aplikację i dokładny element AX na
-   początku nagrania. Obsługuje elementy webowe udostępniane przez proces
+6. `TextInserter` ogranicza czas zapytań Accessibility do `0,5 s`, a
+   przeszukiwanie drzewa elementów do `0,3 s`, żeby zawieszona aplikacja na
+   pierwszym planie nie blokowała głównego wątku. Zapamiętuje aktywną aplikację
+   i dokładny element AX na początku nagrania. Obsługuje elementy webowe udostępniane przez proces
    renderera przeglądarki. Najpierw próbuje bezpośredniej edycji AX, potem
    kontrolowanego `⌘V`. Pola `AXSecureTextField` są zawsze odrzucane. Jeśli
    fokus się zmienił, tekst pozostaje w schowku zamiast trafić do przypadkowego

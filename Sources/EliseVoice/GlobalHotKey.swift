@@ -71,6 +71,12 @@ final class GlobalHotKey: @unchecked Sendable {
         }
     }
 
+    /// False after a failed re-registration, when the shortcut is not bound to
+    /// anything and the app can only be driven from its menu.
+    var isRegistered: Bool {
+        hotKeyReference != nil
+    }
+
     func refreshRegistration() throws {
         if let hotKeyReference {
             UnregisterEventHotKey(hotKeyReference)

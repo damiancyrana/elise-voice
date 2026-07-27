@@ -5,6 +5,10 @@ import Foundation
 /// when the app launched before the network was ready.
 public enum ModelPreparationPolicy {
     public static let maximumRetryDelay: TimeInterval = 60
+    /// Grace period before reloading the model that was dropped under memory
+    /// pressure. Reloading immediately would compete with the system for the
+    /// memory it was just asked to give back.
+    public static let memoryPressureRebuildDelay: TimeInterval = 60
 
     public static func retryDelay(afterFailureCount count: Int) -> TimeInterval {
         guard count > 0 else { return 0 }

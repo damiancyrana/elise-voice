@@ -33,6 +33,11 @@ swiftc \
     Tests/ModelPreparationPolicyCheck.swift \
     -o "$TEMP_DIR/model-preparation-policy-check"
 "$TEMP_DIR/model-preparation-policy-check"
+swiftc \
+    Sources/EliseVoiceCore/HotKeyRecoveryPolicy.swift \
+    Tests/HotKeyRecoveryPolicyCheck.swift \
+    -o "$TEMP_DIR/hot-key-recovery-policy-check"
+"$TEMP_DIR/hot-key-recovery-policy-check"
 plutil -lint Resources/Info.plist
 plutil -lint Resources/EliseVoice.entitlements
 zsh -n scripts/*.sh

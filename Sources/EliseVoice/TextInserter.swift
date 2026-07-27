@@ -42,9 +42,35 @@ enum TextInserter {
         subsystem: "com.elisevoice.app",
         category: "insertion"
     )
+    /// Accessibility queries are synchronous IPC into the target application and
+    /// default to a six second timeout each. A frontmost app that is busy or
+    /// wedged would otherwise stall the main thread for that long, freezing the
+    /// panel, the menu bar and the shortcut.
+    private static let messagingTimeout: Float = 0.5
+    /// Walking a deep element tree multiplies that cost, so the search also runs
+    /// against a wall clock and gives up in favour of the clipboard fallback.
+    private static let treeSearchBudget: TimeInterval = 0.3
+    private static let maximumInspectedElements = 4_096
+    private static var didConfigureGlobalTimeout = false
 
     static var isAuthorized: Bool {
         AXIsProcessTrusted()
+    }
+
+    /// Setting the timeout on the system-wide element applies it process-wide.
+    private static func systemWideElement() -> AXUIElement {
+        let element = AXUIElementCreateSystemWide()
+        if !didConfigureGlobalTimeout {
+            AXUIElementSetMessagingTimeout(element, messagingTimeout)
+            didConfigureGlobalTimeout = true
+        }
+        return element
+    }
+
+    private static func applicationElement(for processIdentifier: pid_t) -> AXUIElement {
+        let element = AXUIElementCreateApplication(processIdentifier)
+        AXUIElementSetMessagingTimeout(element, messagingTimeout)
+        return element
     }
 
     static func requestAccessibilityPermission() -> Bool {
@@ -224,18 +250,16 @@ enum TextInserter {
     }
 
     private static func focusedElement(for processIdentifier: pid_t) -> AXUIElement? {
-        let systemWide = AXUIElementCreateSystemWide()
         if let element = elementAttribute(
             kAXFocusedUIElementAttribute as CFString,
-            of: systemWide
+            of: systemWideElement()
         ) {
             return element
         }
 
-        let application = AXUIElementCreateApplication(processIdentifier)
         if let element = elementAttribute(
             kAXFocusedUIElementAttribute as CFString,
-            of: application
+            of: applicationElement(for: processIdentifier)
         ) {
             return element
         }
@@ -248,7 +272,7 @@ enum TextInserter {
     private static func focusedWindow(for processIdentifier: pid_t) -> AXUIElement? {
         elementAttribute(
             kAXFocusedWindowAttribute as CFString,
-            of: AXUIElementCreateApplication(processIdentifier)
+            of: applicationElement(for: processIdentifier)
         )
     }
 
@@ -266,10 +290,16 @@ enum TextInserter {
     }
 
     private static func focusedDescendant(of root: AXUIElement) -> AXUIElement? {
+        let deadline = ProcessInfo.processInfo.systemUptime + treeSearchBudget
         var elements = childElements(of: root)
         var inspectedElementCount = 0
 
-        while let element = elements.popLast(), inspectedElementCount < 4_096 {
+        while let element = elements.popLast(),
+              inspectedElementCount < maximumInspectedElements {
+            guard ProcessInfo.processInfo.systemUptime < deadline else {
+                logger.notice("Accessibility tree search exceeded its time budget")
+                return nil
+            }
             inspectedElementCount += 1
             if booleanAttribute(kAXFocusedAttribute as CFString, of: element) {
                 return element

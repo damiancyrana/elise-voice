@@ -189,6 +189,42 @@ narastającym opóźnieniem (`ModelPreparationPolicy`), a wybudzenie systemu
 ponawia je natychmiast, bo właśnie wtedy wraca łączność. Panel pokazuje w tej
 fazie `LOADING` z licznikiem sekund.
 
+## 13. Odporność przy pracy ciągłej
+
+Przegląd kodu pod kątem aplikacji rezydentnej wskazał cztery miejsca, w których
+długo działający proces mógł stać się bezużyteczny mimo braku awarii.
+
+**Zapytania Accessibility bez limitu czasu.** `TextInserter` działa na głównym
+wątku, a każde `AXUIElementCopyAttributeValue` to synchroniczne IPC do obcego
+procesu z domyślnym limitem sześciu sekund. Ścieżka awaryjna schodziła po drzewie
+elementów aż do 4096 węzłów, więc jedna zamulona aplikacja na pierwszym planie
+zamrażała panel, menu i skrót. Ustawiony jest teraz limit `0,5 s` — globalnie
+przez element systemowy i dodatkowo na elementach aplikacji — a przeszukiwanie
+drzewa ma twardy budżet `0,3 s`, po którym Elise wybiera schowek zamiast dalej
+odpytywać. Najgorszy przypadek jest ograniczony i deterministyczny.
+
+**Skrót mógł umrzeć na stałe.** `refreshRegistration` najpierw wyrejestrowuje
+skrót, więc nieudana ponowna rejestracja zostawiała aplikację bez jedynego
+wyzwalacza aż do restartu. Odnowienie jest teraz ponawiane z narastającym
+opóźnieniem (`HotKeyRecoveryPolicy`), a menu zawiera pozycję rozpoczynającą
+i kończącą dyktowanie — niezależną od Carbona.
+
+**Monitor kondycji audio budził proces całą dobę.** Pętla `startAudioHealthMonitor`
+żyła od startu procesu do jego końca i budziła się co dwie sekundy tylko po to,
+by sprawdzić, że mikrofon nie działa. Skoro mikrofon pracuje wyłącznie podczas
+dyktowania, monitor jest teraz uruchamiany razem ze strumieniem i zatrzymywany
+razem z nim.
+
+**Model zwolniony pod presją pamięci.** Aplikacja nadal ogłaszała gotowość,
+choć model był zwolniony. Po ustąpieniu presji model jest odbudowywany po
+minucie, cicho i bez pokazywania panelu, więc kolejne dyktowanie nie płaci za
+pełne ładowanie. Odbudowa jest pomijana, jeśli użytkownik w międzyczasie sam
+uruchomił dyktowanie.
+
+Ponawianie przygotowania z sekcji 12 pokazywało panel przy każdej próbie, co
+przy trwałym problemie oznaczało migotanie co minutę. Stan `failed` niesie teraz
+`showsPanel`; powtarzane próby raportują wyłącznie przez ikonę w menu.
+
 ## Stan końcowy
 
 Kod kompiluje się w Swift 6 z ostrzeżeniami traktowanymi jako błędy. Finalny

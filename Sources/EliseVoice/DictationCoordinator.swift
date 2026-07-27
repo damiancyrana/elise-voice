@@ -8,7 +8,14 @@ enum DictationState: Equatable {
     case ready
     case recording(elapsedSeconds: Int)
     case transcribing
-    case failed(String)
+    case failed(String, showsPanel: Bool)
+
+    /// Failures surface the panel by default. Repeated automatic retries pass
+    /// `showsPanel: false` so a permanent problem does not flash the overlay
+    /// every minute; the menu bar icon still reports it.
+    static func failed(_ message: String) -> DictationState {
+        .failed(message, showsPanel: true)
+    }
 }
 
 @MainActor
@@ -30,6 +37,7 @@ final class DictationCoordinator {
     private var failureRecovery: Task<Void, Never>?
     private var transcriptionWatchdog: Task<Void, Never>?
     private var preparationRetry: Task<Void, Never>?
+    private var modelRebuild: Task<Void, Never>?
     private var preparationFailures = 0
     private var isPreparing = false
     private var memoryPressureSource: DispatchSourceMemoryPressure?
@@ -62,7 +70,6 @@ final class DictationCoordinator {
             }
         }
         installLifecycleObservers()
-        startAudioHealthMonitor()
         startMemoryPressureMonitor()
     }
 
@@ -102,7 +109,10 @@ final class DictationCoordinator {
             let delay = ModelPreparationPolicy.retryDelay(
                 afterFailureCount: preparationFailures
             )
-            state = .failed("Model nie jest gotowy — ponawiam za \(Int(delay)) s")
+            state = .failed(
+                "Model nie jest gotowy — ponawiam za \(Int(delay)) s",
+                showsPanel: preparationFailures <= 2
+            )
             schedulePreparationRetry(after: delay)
         }
     }
@@ -145,6 +155,8 @@ final class DictationCoordinator {
         transcriptionWatchdog = nil
         preparationRetry?.cancel()
         preparationRetry = nil
+        modelRebuild?.cancel()
+        modelRebuild = nil
         transcriptionGeneration &+= 1
         memoryPressureSource?.cancel()
         memoryPressureSource = nil
@@ -324,6 +336,7 @@ final class DictationCoordinator {
     private func ensureMicrophoneRunning() throws {
         if !audioCapture.isMonitoring {
             try audioCapture.startMonitoring()
+            startAudioHealthMonitor()
         }
         consecutiveAudioRecoveryFailures = 0
     }
@@ -363,6 +376,11 @@ final class DictationCoordinator {
     }
 
     private func stopMicrophone() {
+        // The heartbeat only has something to watch while the stream runs, so it
+        // is tied to the stream instead of to the process. Otherwise it woke the
+        // app every two seconds around the clock just to re-check a flag.
+        audioHealthMonitor?.cancel()
+        audioHealthMonitor = nil
         audioCapture.stopMonitoring()
     }
 
@@ -410,13 +428,36 @@ final class DictationCoordinator {
             MainActor.assumeIsolated {
                 guard let self, self.state == .ready else { return }
                 self.modelIsReady = false
-                Task {
-                    await self.transcriptionService.releaseModelForMemoryPressure()
-                }
+                self.scheduleModelRebuildAfterMemoryPressure()
             }
         }
         source.resume()
         memoryPressureSource = source
+    }
+
+    /// Dropping the model leaves the app advertising a readiness it can no
+    /// longer deliver immediately. Rebuild it quietly once the system has had
+    /// time to recover, without showing the panel the user never asked for.
+    private func scheduleModelRebuildAfterMemoryPressure() {
+        modelRebuild?.cancel()
+        modelRebuild = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await transcriptionService.releaseModelForMemoryPressure()
+            try? await Task.sleep(
+                for: .seconds(ModelPreparationPolicy.memoryPressureRebuildDelay)
+            )
+            guard !Task.isCancelled, !modelIsReady, state == .ready else { return }
+            modelRebuild = nil
+            do {
+                try await transcriptionService.prepare()
+                modelIsReady = true
+                logger.notice("Transcription model rebuilt after memory pressure")
+            } catch {
+                logger.error(
+                    "Rebuild after memory pressure failed: \(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
     }
 
     private func installLifecycleObservers() {
