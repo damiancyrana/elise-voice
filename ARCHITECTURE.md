@@ -51,6 +51,12 @@ Produkcyjna aplikacja korzysta wyłącznie z transkrypcji
 `openai_whisper-large-v3-v20240930_626MB`. Model jest ładowany i rozgrzewany
 podczas startu, ale wykonuje inferencję dopiero po zakończeniu dyktowania.
 
+Gdy komplet plików modelu i tokenizer są na dysku, `ModelStorage` wskazuje ich
+katalog, a `TranscriptionService` przekazuje go WhisperKitowi jako `modelFolder`
+z wyłączonym pobieraniem. Zwykły start nie wykonuje wtedy żadnego zapytania
+sieciowego i działa bez łączności. Nieudane przygotowanie jest ponawiane z
+narastającym opóźnieniem, a wybudzenie systemu ponawia je natychmiast.
+
 Modele aktywacji `EliseWakeWord` i `ElisePersonalWakeVerifier` nie są kopiowane
 do bundle'a, przygotowywane ani wywoływane. Ich dawne źródła i narzędzia
 treningowe mogą służyć wyłącznie do analizy historycznych eksperymentów. Nie są

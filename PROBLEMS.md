@@ -150,6 +150,45 @@ produkcyjna jest bezpiecznie zamknięta: usunięto wybudzanie głosem,
 inicjalizację obu detektorów, zasoby modeli w bundle'u, punkty podłączenia do
 strumienia audio i menu tej funkcji. Jedynym wyzwalaczem pozostaje `⌥Space`.
 
+## 12. Zawieszony start po włączeniu komputera
+
+Po wybudzeniu maszyny aplikacja potrafiła stać kilka minut w stanie
+przygotowania, zanim zaczęła przyjmować dyktowanie. Logi systemowe z 27 lipca
+2026 pokazały dokładny przebieg: proces startował o `08:59:48`, a pół sekundy
+później Wi-Fi nadal nie działało (`nw_connection … reporting state failed error
+Network is down`) i przygotowanie kończyło się błędem
+`downloadError("Połączenie z Internetem jest prawdopodobnie offline")`. Gotowość
+osiągnął dopiero proces uruchomiony o `09:02:21` — po 72 sekundach, czyli
+łącznie prawie cztery minuty od włączenia komputera.
+
+Złożyły się na to dwie przyczyny.
+
+Po pierwsze, start przechodził przez sieć mimo kompletnego modelu na dysku.
+`TranscriptionService` przekazywał tylko `downloadBase`, bez `modelFolder`.
+WhisperKit traktuje te pola rozłącznie: brak `modelFolder` przy `download: true`
+kieruje każde uruchomienie do `Self.download`, czyli do zapytania o listę plików
+repozytorium i do zapytania o metadane każdego pliku modelu — zanim biblioteka
+spojrzy na dysk. Dawało to kilkanaście żądań HTTP przy każdym starcie i twardy
+błąd, gdy aplikacja uruchomiła się szybciej niż sieć. Ponowienia nie było:
+`prepare()` wołane jest raz przy starcie, więc jedynym wyjściem ze stanu błędu
+pozostawał ręczny skrót. Aplikacja miała już lokalną walidację modelu i zapisany
+znacznik `model-ready.json`, ale ta wiedza nie docierała do konfiguracji
+WhisperKita.
+
+Po drugie, panel pokazywał statyczny napis `START` przez cały czas ładowania.
+Model Large v3 zajmuje 598 MB, a `prewarm` i `load` to dwa przejścia przez Neural
+Engine; przy zimnym cache dysku trwa to kilkadziesiąt sekund. Bez licznika ani
+postępu wyglądało to na zawieszenie, więc proces bywał zabijany w trakcie
+ładowania i kolejne uruchomienie zaczynało pracę od zera, co wydłużało całość.
+
+Rozwiązanie: `ModelStorage` zwraca teraz `TranscriptionModelLocation` i wskazuje
+katalog modelu, gdy komplet plików oraz tokenizer są na dysku. `TranscriptionService`
+przekazuje ten katalog jako `modelFolder` i ustawia `download: false`, więc
+zwykły start nie dotyka sieci. Nieudane przygotowanie jest ponawiane z
+narastającym opóźnieniem (`ModelPreparationPolicy`), a wybudzenie systemu
+ponawia je natychmiast, bo właśnie wtedy wraca łączność. Panel pokazuje w tej
+fazie `LOADING` z licznikiem sekund.
+
 ## Stan końcowy
 
 Kod kompiluje się w Swift 6 z ostrzeżeniami traktowanymi jako błędy. Finalny

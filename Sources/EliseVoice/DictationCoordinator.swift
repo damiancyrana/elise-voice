@@ -29,6 +29,9 @@ final class DictationCoordinator {
     private var audioRecovery: Task<Void, Never>?
     private var failureRecovery: Task<Void, Never>?
     private var transcriptionWatchdog: Task<Void, Never>?
+    private var preparationRetry: Task<Void, Never>?
+    private var preparationFailures = 0
+    private var isPreparing = false
     private var memoryPressureSource: DispatchSourceMemoryPressure?
     private var lifecycleObservers: [NSObjectProtocol] = []
     private var isStartingRecording = false
@@ -64,6 +67,12 @@ final class DictationCoordinator {
     }
 
     func prepare() async {
+        guard !isPreparing else { return }
+        isPreparing = true
+        defer { isPreparing = false }
+
+        preparationRetry?.cancel()
+        preparationRetry = nil
         failureRecovery?.cancel()
         failureRecovery = nil
         state = .preparing
@@ -79,6 +88,7 @@ final class DictationCoordinator {
         do {
             try await transcriptionService.prepare()
             modelIsReady = true
+            preparationFailures = 0
 
             if accessibilityIsReady {
                 await transitionToReady()
@@ -88,7 +98,12 @@ final class DictationCoordinator {
             }
         } catch {
             logger.error("Preparation failed: \(error.localizedDescription, privacy: .public)")
-            state = .failed("Nie udało się przygotować modelu: \(error.localizedDescription)")
+            preparationFailures += 1
+            let delay = ModelPreparationPolicy.retryDelay(
+                afterFailureCount: preparationFailures
+            )
+            state = .failed("Model nie jest gotowy — ponawiam za \(Int(delay)) s")
+            schedulePreparationRetry(after: delay)
         }
     }
 
@@ -128,6 +143,8 @@ final class DictationCoordinator {
         failureRecovery = nil
         transcriptionWatchdog?.cancel()
         transcriptionWatchdog = nil
+        preparationRetry?.cancel()
+        preparationRetry = nil
         transcriptionGeneration &+= 1
         memoryPressureSource?.cancel()
         memoryPressureSource = nil
@@ -453,7 +470,26 @@ final class DictationCoordinator {
         systemAllowsAudio = true
         scheduleAudioRecovery(reason: "system resume")
         Task { @MainActor [weak self] in
-            await self?.startPendingDictationIfRequested()
+            guard let self else { return }
+            // Waking or unlocking is when connectivity and the disk cache come
+            // back, so an earlier preparation failure is retried immediately
+            // instead of waiting out the remaining backoff.
+            if !modelIsReady {
+                preparationFailures = 0
+                await prepare()
+                return
+            }
+            await startPendingDictationIfRequested()
+        }
+    }
+
+    private func schedulePreparationRetry(after delay: TimeInterval) {
+        preparationRetry?.cancel()
+        preparationRetry = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self, !modelIsReady else { return }
+            preparationRetry = nil
+            await prepare()
         }
     }
 

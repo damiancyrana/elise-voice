@@ -29,6 +29,7 @@ final class RecordingWindowController {
     private let model = RecordingWindowModel()
     private let panel: NSPanel
     private var delayedHide: Task<Void, Never>?
+    private var preparingTicker: Task<Void, Never>?
     private var hideGeneration = 0
 
     init() {
@@ -56,10 +57,12 @@ final class RecordingWindowController {
 
     func render(_ state: DictationState) {
         delayedHide?.cancel()
+        if case .preparing = state {} else { stopPreparingTicker() }
 
         switch state {
         case .preparing:
             model.phase = .preparing
+            startPreparingTicker()
             show()
         case .ready:
             hide()
@@ -100,6 +103,28 @@ final class RecordingWindowController {
             guard !Task.isCancelled else { return }
             self?.hide()
         }
+    }
+
+    /// Loading Large v3 from a cold cache takes over a minute. Counting the
+    /// seconds tells the user the app is working rather than hung, which is what
+    /// a static label looked like.
+    private func startPreparingTicker() {
+        guard preparingTicker == nil else { return }
+        model.elapsedSeconds = 0
+        preparingTicker = Task { @MainActor [weak self] in
+            var seconds = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled, let self else { return }
+                seconds += 1
+                model.elapsedSeconds = seconds
+            }
+        }
+    }
+
+    private func stopPreparingTicker() {
+        preparingTicker?.cancel()
+        preparingTicker = nil
     }
 
     private func show() {
@@ -279,7 +304,7 @@ private struct RecordingOverlayView: View {
 
                 Spacer(minLength: 5)
 
-                if model.phase == .recording {
+                if model.phase == .recording || model.phase == .preparing {
                     Text(formattedDuration(model.elapsedSeconds))
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.94))
@@ -325,7 +350,7 @@ private struct RecordingOverlayView: View {
         case .listening:
             "ELISE"
         case .preparing:
-            "START"
+            "LOADING"
         case .recording:
             "RECORDING"
         case .transcribing:

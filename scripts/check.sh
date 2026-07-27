@@ -28,6 +28,11 @@ swiftc \
     Tests/TextInsertionPolicyCheck.swift \
     -o "$TEMP_DIR/text-insertion-policy-check"
 "$TEMP_DIR/text-insertion-policy-check"
+swiftc \
+    Sources/EliseVoiceCore/ModelPreparationPolicy.swift \
+    Tests/ModelPreparationPolicyCheck.swift \
+    -o "$TEMP_DIR/model-preparation-policy-check"
+"$TEMP_DIR/model-preparation-policy-check"
 plutil -lint Resources/Info.plist
 plutil -lint Resources/EliseVoice.entitlements
 zsh -n scripts/*.sh

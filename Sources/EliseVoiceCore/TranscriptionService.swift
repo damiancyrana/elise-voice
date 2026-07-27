@@ -17,10 +17,15 @@ public actor TranscriptionService {
         guard whisperKit == nil else { return }
         let startedAt = ProcessInfo.processInfo.systemUptime
 
-        let modelDirectory = try ModelStorage.prepareForTranscriptionModel(named: Self.modelName)
+        let location = try ModelStorage.prepareForTranscriptionModel(named: Self.modelName)
+        // Pointing WhisperKit at the local folder keeps the launch entirely
+        // offline. Without it every launch asks Hugging Face about each model
+        // file, which fails outright when the app starts before the network is
+        // up — for example right after waking or booting the machine.
         let config = WhisperKitConfig(
             model: Self.modelName,
-            downloadBase: modelDirectory,
+            downloadBase: location.downloadBase,
+            modelFolder: location.localModelFolder?.path,
             computeOptions: ModelComputeOptions(
                 melCompute: .cpuAndGPU,
                 audioEncoderCompute: .cpuAndNeuralEngine,
@@ -30,12 +35,12 @@ public actor TranscriptionService {
             logLevel: .error,
             prewarm: true,
             load: true,
-            download: true
+            download: !location.canStartOffline
         )
         whisperKit = try await WhisperKit(config)
         try ModelStorage.markTranscriptionModelReady(named: Self.modelName)
         logger.info(
-            "Transcription model ready in \(ProcessInfo.processInfo.systemUptime - startedAt, format: .fixed(precision: 2)) seconds"
+            "Transcription model ready in \(ProcessInfo.processInfo.systemUptime - startedAt, format: .fixed(precision: 2)) seconds, offline start: \(location.canStartOffline, privacy: .public)"
         )
     }
 

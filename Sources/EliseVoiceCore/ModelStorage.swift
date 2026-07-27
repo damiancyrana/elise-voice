@@ -12,9 +12,25 @@ public enum ModelStorageError: LocalizedError {
     }
 }
 
+/// Where the transcription model lives and whether it can be loaded without
+/// contacting Hugging Face.
+public struct TranscriptionModelLocation: Sendable {
+    /// Root directory handed to WhisperKit as its download base.
+    public let downloadBase: URL
+    /// Set only when the model and its tokenizer are already complete on disk.
+    /// WhisperKit then loads straight from this folder instead of querying the
+    /// Hub for every model file on each launch.
+    public let localModelFolder: URL?
+
+    public var canStartOffline: Bool { localModelFolder != nil }
+}
+
 public enum ModelStorage {
     private static let logger = Logger(subsystem: "com.elisevoice.app", category: "model")
     private static let minimumFreeSpace: Int64 = 1_500_000_000
+    /// Tokenizer repository WhisperKit resolves for the Large v3 variant. It is
+    /// stored next to the model and must be present for an offline start.
+    private static let tokenizerRepository = "openai/whisper-large-v3"
 
     public static func directory() throws -> URL {
         let applicationSupport = try FileManager.default.url(
@@ -33,10 +49,16 @@ public enum ModelStorage {
         return directory
     }
 
-    public static func prepareForTranscriptionModel(named modelName: String) throws -> URL {
+    public static func prepareForTranscriptionModel(
+        named modelName: String
+    ) throws -> TranscriptionModelLocation {
         let root = try directory()
         let model = transcriptionModelDirectory(root: root, modelName: modelName)
-        if FileManager.default.fileExists(atPath: model.path), !isValidTranscriptionModel(at: model) {
+        // Validation walks the whole model directory, so it runs once per launch
+        // and the result is reused for both the quarantine and the space check.
+        var modelIsComplete = isValidTranscriptionModel(at: model)
+
+        if FileManager.default.fileExists(atPath: model.path), !modelIsComplete {
             let quarantine = root
                 .appendingPathComponent("Quarantine", isDirectory: true)
                 .appendingPathComponent("\(model.lastPathComponent)-incomplete-\(Int(Date().timeIntervalSince1970))")
@@ -46,11 +68,19 @@ public enum ModelStorage {
             )
             try FileManager.default.moveItem(at: model, to: quarantine)
             logger.notice("Moved incomplete transcription model to quarantine")
+            modelIsComplete = false
         }
-        if !isValidTranscriptionModel(at: model) {
+        if !modelIsComplete {
             try requireDownloadSpace(at: root)
         }
-        return root
+
+        // Loading offline also needs the tokenizer; without it WhisperKit would
+        // fall back to the Hub and fail whenever the network is unavailable.
+        let startsOffline = modelIsComplete && hasLocalTokenizer(root: root)
+        return TranscriptionModelLocation(
+            downloadBase: root,
+            localModelFolder: startsOffline ? model : nil
+        )
     }
 
     public static func markTranscriptionModelReady(named modelName: String) throws {
@@ -95,6 +125,14 @@ public enum ModelStorage {
             try FileManager.default.removeItem(at: candidate)
             logger.notice("Removed legacy Whisper Tiny wake model")
         }
+    }
+
+    private static func hasLocalTokenizer(root: URL) -> Bool {
+        let tokenizer = root
+            .appendingPathComponent("models", isDirectory: true)
+            .appendingPathComponent(tokenizerRepository, isDirectory: true)
+            .appendingPathComponent("tokenizer.json")
+        return FileManager.default.fileExists(atPath: tokenizer.path)
     }
 
     private static func transcriptionModelDirectory(root: URL, modelName: String) -> URL {
