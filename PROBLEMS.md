@@ -225,6 +225,26 @@ Ponawianie przygotowania z sekcji 12 pokazywało panel przy każdej próbie, co
 przy trwałym problemie oznaczało migotanie co minutę. Stan `failed` niesie teraz
 `showsPanel`; powtarzane próby raportują wyłącznie przez ikonę w menu.
 
+Przegląd kontrolny powyższych zmian ujawnił, że ponawianie dodane w sekcji 12
+obejmowało wyłącznie `prepare()`, a trzy inne ścieżki nadal kończyły się stanem
+bez wyjścia. `presentRecoverableFailure` przy braku gotowego modelu kończyło
+zadanie cicho, bo warunek powrotu wymagał `modelIsReady`; wchodziło się tam po
+nieudanym przygotowaniu wywołanym skrótem, co jest realne po zwolnieniu modelu
+pod presją pamięci. Watchdog transkrypcji przy nieudanej odbudowie ustawiał
+`failed` bez żadnego ponowienia. Brak uprawnienia Dostępności w tej samej
+ścieżce również nie uruchamiał monitora, który by je wykrył. Każde zakończenie
+bez używalnego modelu przechodzi teraz przez wspólne `reportPreparationFailure`,
+a brak uprawnienia uruchamia monitor.
+
+Odbudowa po presji pamięci miała wyścig: zadanie zerowało swoją referencję przed
+ładowaniem, więc kolejne zdarzenie presji nie mogło go anulować i mogło zwolnić
+model już po tym, jak starsze zadanie ogłosiło gotowość. Gotowość jest teraz
+deklarowana dopiero po sprawdzeniu, że zadanie nadal jest aktualne.
+
+Ostatnią pozostałą pułapką był odrzucony dostęp do mikrofonu: przyznanie go w
+Ustawieniach systemowych nie powiadamia aplikacji, więc stan błędu utrzymywał
+się mimo poprawnej konfiguracji. Ta ścieżka również ponawia sprawdzenie.
+
 ## Stan końcowy
 
 Kod kompiluje się w Swift 6 z ostrzeżeniami traktowanymi jako błędy. Finalny

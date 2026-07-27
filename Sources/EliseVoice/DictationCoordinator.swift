@@ -86,7 +86,9 @@ final class DictationCoordinator {
         stopMicrophone()
 
         guard await audioCapture.requestPermission() else {
-            state = .failed("Włącz Elise Voice w Prywatność i ochrona → Mikrofon")
+            // Granting the permission in System Settings does not notify the
+            // app, so this has to be re-checked instead of waiting forever.
+            reportPreparationFailure("Włącz Elise Voice w Prywatność i ochrona → Mikrofon")
             return
         }
 
@@ -105,16 +107,22 @@ final class DictationCoordinator {
             }
         } catch {
             logger.error("Preparation failed: \(error.localizedDescription, privacy: .public)")
-            preparationFailures += 1
-            let delay = ModelPreparationPolicy.retryDelay(
-                afterFailureCount: preparationFailures
-            )
-            state = .failed(
-                "Model nie jest gotowy — ponawiam za \(Int(delay)) s",
-                showsPanel: preparationFailures <= 2
-            )
-            schedulePreparationRetry(after: delay)
+            reportPreparationFailure()
         }
+    }
+
+    /// Every path that ends without a usable model must schedule its own way
+    /// back, otherwise the app parks in a failed state until it is restarted.
+    private func reportPreparationFailure(_ message: String? = nil) {
+        preparationFailures += 1
+        let delay = ModelPreparationPolicy.retryDelay(
+            afterFailureCount: preparationFailures
+        )
+        state = .failed(
+            message ?? "Model nie jest gotowy — ponawiam za \(Int(delay)) s",
+            showsPanel: preparationFailures <= 2
+        )
+        schedulePreparationRetry(after: delay)
     }
 
     func toggleDictation() async {
@@ -447,10 +455,14 @@ final class DictationCoordinator {
                 for: .seconds(ModelPreparationPolicy.memoryPressureRebuildDelay)
             )
             guard !Task.isCancelled, !modelIsReady, state == .ready else { return }
-            modelRebuild = nil
             do {
                 try await transcriptionService.prepare()
+                // A newer pressure event can release the model while this load
+                // is in flight, so readiness is only claimed if this task is
+                // still the current one.
+                guard !Task.isCancelled else { return }
                 modelIsReady = true
+                modelRebuild = nil
                 logger.notice("Transcription model rebuilt after memory pressure")
             } catch {
                 logger.error(
@@ -601,8 +613,11 @@ final class DictationCoordinator {
                 modelIsReady = true
                 presentRecoverableFailure("Transkrypcja została bezpiecznie zrestartowana")
             } catch {
+                logger.error(
+                    "Rebuild after watchdog failed: \(error.localizedDescription, privacy: .public)"
+                )
                 modelIsReady = false
-                state = .failed("Nie udało się ponownie przygotować modelu")
+                reportPreparationFailure()
             }
         }
     }
@@ -618,7 +633,17 @@ final class DictationCoordinator {
             try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled, let self else { return }
             failureRecovery = nil
-            guard modelIsReady, TextInserter.isAuthorized else { return }
+            guard TextInserter.isAuthorized else {
+                // The monitor restores readiness once the permission is granted.
+                startAccessibilityMonitor()
+                return
+            }
+            guard modelIsReady else {
+                // There is no ready state to return to without a model, and
+                // prepare() owns the retry backoff.
+                await prepare()
+                return
+            }
             await transitionToReady()
         }
     }
