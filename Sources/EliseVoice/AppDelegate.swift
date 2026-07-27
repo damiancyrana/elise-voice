@@ -26,16 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         self.coordinator = coordinator
 
-        do {
-            hotKey = try GlobalHotKey(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey)) {
-                Task { @MainActor [weak coordinator] in
-                    await coordinator?.toggleDictation()
-                }
-            }
-        } catch {
-            render(.failed("Nie można zarejestrować skrótu ⌥Space"))
-            return
-        }
+        installHotKey()
         installHotKeyLifecycleObservers()
 
         Task {
@@ -161,27 +152,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Claims ⌥Space, creating the registration or refreshing an existing one.
+    /// A failure never aborts startup: the app keeps its menu trigger, loads the
+    /// model and observes the system, while registration keeps retrying. Before
+    /// this, a shortcut held by another app at launch left Elise without a
+    /// model, without lifecycle observers and without login registration.
+    private func installHotKey() {
+        do {
+            if let hotKey {
+                try hotKey.refreshRegistration()
+            } else {
+                hotKey = try GlobalHotKey(
+                    keyCode: UInt32(kVK_Space),
+                    modifiers: UInt32(optionKey)
+                ) { [weak self] in
+                    Task { @MainActor in
+                        await self?.coordinator?.toggleDictation()
+                    }
+                }
+            }
+            hotKeyFailures = 0
+        } catch {
+            hotKeyFailures += 1
+            let retryDelay = HotKeyRecoveryPolicy.retryDelay(
+                afterFailureCount: hotKeyFailures
+            )
+            render(.failed(
+                "Skrót ⌥Space jest zajęty — użyj menu; ponawiam za \(Int(retryDelay)) s",
+                showsPanel: hotKeyFailures <= 2
+            ))
+            scheduleHotKeyRegistrationRefresh(after: retryDelay)
+        }
+    }
+
     private func scheduleHotKeyRegistrationRefresh(after delay: TimeInterval = 0.5) {
         hotKeyRefreshTask?.cancel()
         hotKeyRefreshTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(delay))
-            guard !Task.isCancelled, let self, let hotKey else { return }
-            do {
-                try hotKey.refreshRegistration()
-                hotKeyFailures = 0
-            } catch {
-                // Re-registration unregisters first, so giving up here would
-                // leave the app without its only trigger until it is restarted.
-                hotKeyFailures += 1
-                let retryDelay = HotKeyRecoveryPolicy.retryDelay(
-                    afterFailureCount: hotKeyFailures
-                )
-                render(.failed(
-                    "Skrót ⌥Space jest zajęty — ponawiam za \(Int(retryDelay)) s",
-                    showsPanel: hotKeyFailures <= 2
-                ))
-                scheduleHotKeyRegistrationRefresh(after: retryDelay)
-            }
+            guard !Task.isCancelled, let self else { return }
+            installHotKey()
         }
     }
 }

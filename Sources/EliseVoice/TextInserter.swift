@@ -42,10 +42,10 @@ enum TextInserter {
         subsystem: "com.elisevoice.app",
         category: "insertion"
     )
-    /// Accessibility queries are synchronous IPC into the target application and
-    /// default to a six second timeout each. A frontmost app that is busy or
-    /// wedged would otherwise stall the main thread for that long, freezing the
-    /// panel, the menu bar and the shortcut.
+    /// Accessibility queries are synchronous IPC into the target application, so
+    /// a wedged frontmost app stalls the main thread and freezes the panel, the
+    /// menu bar and the shortcut. Measured against a suspended process, the
+    /// system default stalls for 1.5 s per query; this bounds it to 0.5 s.
     private static let messagingTimeout: Float = 0.5
     /// Walking a deep element tree multiplies that cost, so the search also runs
     /// against a wall clock and gives up in favour of the clipboard fallback.

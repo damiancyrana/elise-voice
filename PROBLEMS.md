@@ -245,6 +245,18 @@ Ostatnią pozostałą pułapką był odrzucony dostęp do mikrofonu: przyznanie 
 Ustawieniach systemowych nie powiadamia aplikacji, więc stan błędu utrzymywał
 się mimo poprawnej konfiguracji. Ta ścieżka również ponawia sprawdzenie.
 
+Projektowanie testu konfliktu skrótu ujawniło najcięższy przypadek: nieudana
+rejestracja `⌥Space` w `applicationDidFinishLaunching` kończyła się `return`,
+który pomijał resztę startu — obserwatory cyklu życia, rejestrację przy
+logowaniu i, co najważniejsze, `prepare()`. Aplikacja startowała wtedy bez
+modelu. Rejestracja skrótu przeniosła się do `installHotKey`, które nigdy nie
+przerywa startu i samo ponawia próby.
+
+Pomiar potwierdził też skalę problemu z Accessibility: zapytanie do procesu
+zatrzymanego sygnałem `SIGSTOP` trwa 1,502 s przy ustawieniu domyślnym i
+0,504 s po ustawieniu limitu. Przy przechodzeniu drzewa do 4096 węzłów sam
+limit nie wystarcza, dlatego obowiązuje również budżet czasowy.
+
 ## Stan końcowy
 
 Kod kompiluje się w Swift 6 z ostrzeżeniami traktowanymi jako błędy. Finalny
