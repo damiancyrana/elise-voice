@@ -1,6 +1,6 @@
 # Elise Voice
 
-Wersja 1.8.0 — lokalne dyktowanie po polsku na macOS, uruchamiane wyłącznie
+Wersja 1.8.1 — lokalne dyktowanie po polsku na macOS, uruchamiane wyłącznie
 skrótem klawiszowym.
 
 ## Działanie

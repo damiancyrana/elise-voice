@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import OSLog
 import SwiftUI
 
 private enum RecordingOverlayPhase: Equatable {
@@ -26,11 +27,14 @@ private final class RecordingWindowModel: ObservableObject {
 final class RecordingWindowController {
     private static let panelSize = NSSize(width: 430, height: 122)
 
+    private let logger = Logger(subsystem: "com.elisevoice.app", category: "overlay")
     private let model = RecordingWindowModel()
     private let panel: NSPanel
     private var delayedHide: Task<Void, Never>?
     private var preparingTicker: Task<Void, Never>?
-    private var hideGeneration = 0
+    private var pendingHide: Task<Void, Never>?
+    private var presentationGeneration = 0
+    private var systemObservers: [NSObjectProtocol] = []
 
     init() {
         panel = NSPanel(
@@ -42,8 +46,16 @@ final class RecordingWindowController {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
-        panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
+        // The window server hides the whole menu bar layer while another
+        // application is full screen, and the overlay used to sit just above the
+        // status bar. Screen saver level stays above full-screen windows.
+        panel.level = .screenSaver
         panel.hidesOnDeactivate = false
+        // Elise is a regular application, so "Hide Others" and ⌘H used to hide
+        // this panel for the rest of the session: dictation kept working from
+        // the shortcut while the overlay never came back on screen.
+        panel.canHide = false
+        panel.isReleasedWhenClosed = false
         panel.ignoresMouseEvents = true
         panel.isMovable = false
         panel.collectionBehavior = [
@@ -53,6 +65,7 @@ final class RecordingWindowController {
             .ignoresCycle
         ]
         panel.contentView = NSHostingView(rootView: RecordingOverlayView(model: model))
+        observeSystemChanges()
     }
 
     func render(_ state: DictationState) {
@@ -133,19 +146,37 @@ final class RecordingWindowController {
         preparingTicker = nil
     }
 
+    /// Every path is unconditional on purpose. The previous version returned
+    /// early whenever the panel was already on screen, which left two ways for
+    /// the overlay to disappear for the rest of the session: a show() arriving
+    /// inside the 210 ms hide window never restored `isPresented`, so the panel
+    /// stayed on screen fully transparent, and a panel pushed behind another
+    /// window was never ordered front again.
     private func show() {
+        pendingHide?.cancel()
+        pendingHide = nil
+        presentationGeneration &+= 1
+        let generation = presentationGeneration
+
         positionPanel()
         model.animationActive = true
-        guard !panel.isVisible else { return }
+        orderPanelFront()
 
-        hideGeneration += 1
-        model.isPresented = false
-        panel.alphaValue = 1
-        panel.orderFrontRegardless()
+        guard !model.isPresented else { return }
 
         Task { @MainActor [weak self] in
             await Task.yield()
-            guard let self, self.panel.isVisible else { return }
+            guard let self, self.presentationGeneration == generation else { return }
+            if !self.panel.isVisible {
+                // Ordering a window front loses against a hidden application or
+                // a space transition, and no state change would retry it.
+                self.orderPanelFront()
+                if !self.panel.isVisible {
+                    self.logger.notice(
+                        "Overlay stayed off screen (appHidden=\(NSApp.isHidden ? "yes" : "no", privacy: .public))"
+                    )
+                }
+            }
             withAnimation(.spring(response: 0.48, dampingFraction: 0.76, blendDuration: 0.12)) {
                 self.model.isPresented = true
             }
@@ -153,24 +184,70 @@ final class RecordingWindowController {
     }
 
     private func hide() {
+        presentationGeneration &+= 1
+        let generation = presentationGeneration
+        pendingHide?.cancel()
+        pendingHide = nil
+
         guard panel.isVisible else {
             model.isPresented = false
             model.animationActive = false
             return
         }
-        hideGeneration += 1
-        let generation = hideGeneration
 
         withAnimation(.easeIn(duration: 0.18)) {
             model.isPresented = false
         }
 
-        Task { @MainActor [weak self] in
+        pendingHide = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(210))
-            guard let self, self.hideGeneration == generation, !self.model.isPresented else { return }
+            guard let self, !Task.isCancelled,
+                  self.presentationGeneration == generation else { return }
+            self.pendingHide = nil
             self.panel.orderOut(nil)
             self.model.animationActive = false
         }
+    }
+
+    private func orderPanelFront() {
+        if NSApp.isHidden {
+            // A hidden application cannot put any window on screen, and the
+            // panel is the only window this app ever shows.
+            NSApp.unhideWithoutActivation()
+        }
+        panel.alphaValue = 1
+        panel.orderFrontRegardless()
+    }
+
+    /// Switching spaces, another application entering or leaving full screen and
+    /// attaching a display all leave the overlay behind the active window while
+    /// AppKit still reports it as visible. No dictation state change follows, so
+    /// nothing else would order it front again.
+    private func observeSystemChanges() {
+        systemObservers.append(
+            NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.activeSpaceDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.reassertPresentation() }
+            }
+        )
+        systemObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: NSApplication.didChangeScreenParametersNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.reassertPresentation() }
+            }
+        )
+    }
+
+    private func reassertPresentation() {
+        guard model.animationActive else { return }
+        positionPanel()
+        orderPanelFront()
     }
 
     private func positionPanel() {

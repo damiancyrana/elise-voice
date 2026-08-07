@@ -35,7 +35,11 @@ zatrzymywany przed uruchomieniem transkrypcji.
    99,5-sekundowego polskiego nagrania na docelowym M4 Pro. Zawieszona
    transkrypcja ma watchdog i jednorazową odbudowę modelu.
 5. `RecordingWindowController` wyświetla nieaktywujący panel SwiftUI/AppKit pod
-   notchem. `TimelineView` istnieje wyłącznie podczas widocznej animacji.
+   notchem. `TimelineView` istnieje wyłącznie podczas widocznej animacji. Panel
+   pracuje na poziomie wygaszacza ekranu, więc pozostaje nad aplikacją w trybie
+   pełnoekranowym, i nie jest ukrywany razem z aplikacją. Pokazanie panelu jest
+   bezwarunkowe: każde wywołanie ponownie ustawia pozycję i wynosi okno na
+   wierzch, a zmiana przestrzeni lub konfiguracji ekranów wymusza to samo.
 6. `TextInserter` ogranicza czas zapytań Accessibility do `0,5 s`, a
    przeszukiwanie drzewa elementów do `0,3 s`, żeby zawieszona aplikacja na
    pierwszym planie nie blokowała głównego wątku. Zapamiętuje aktywną aplikację

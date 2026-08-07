@@ -257,6 +257,47 @@ zatrzymanego sygnałem `SIGSTOP` trwa 1,502 s przy ustawieniu domyślnym i
 0,504 s po ustawieniu limitu. Przy przechodzeniu drzewa do 4096 węzłów sam
 limit nie wystarcza, dlatego obowiązuje również budżet czasowy.
 
+## 14. Znikający overlay przy pracy ciągłej i w trybie pełnoekranowym
+
+Zgłoszenie z 7 sierpnia 2026: po kilku dniach nieprzerwanej pracy dyktowanie
+działa normalnie, ale panel z portretem i falą głosu przestaje się pokazywać.
+Niezależnie od tego overlay bywa zasłonięty przez aplikację uruchomioną w trybie
+pełnoekranowym.
+
+Pomiar na żywo na procesie działającym pięć dni potwierdził pierwszą przyczynę
+wprost: panel raportował `layer = 26`, czyli `NSWindow.Level.statusBar + 1`.
+Jest to warstwa paska menu, a serwer okien ukrywa ją w całości, gdy inna
+aplikacja przechodzi w tryb pełnoekranowy. `fullScreenAuxiliary` tego nie
+zmienia, bo problem leży w poziomie okna, nie w zachowaniu przestrzeni. Panel
+pracuje teraz na poziomie wygaszacza ekranu.
+
+Znikanie overlaya miało trzy niezależne źródła, wszystkie w warunkowym
+pokazywaniu panelu.
+
+**Panel nigdy nie wracał na wierzch.** `show()` kończyło się wcześnie, gdy okno
+było już widoczne, więc `orderFrontRegardless` wykonywało się wyłącznie przy
+pierwszym pokazaniu. Cokolwiek przykryło panel albo przeniosło go na inną
+przestrzeń, zostawało tak do końca sesji. Pokazywanie jest teraz bezwarunkowe, a
+zmiana aktywnej przestrzeni oraz konfiguracji ekranów wymusza ponowne ustawienie
+pozycji i wyniesienie okna.
+
+**Wyścig ukrywania i pokazywania.** `hide()` zerowało `isPresented` i planowało
+`orderOut` po 210 ms. Wywołanie `show()` w tym oknie czasu trafiało w ten sam
+warunek wczesnego wyjścia i nie przywracało `isPresented`, a wszystkie elementy
+widoku mają krycie zależne od tej wartości — panel zostawał na ekranie całkowicie
+przezroczysty. Dodatkowo licznik pokoleń był zwiększany dopiero po tym warunku,
+więc zaległe zadanie i tak wykonywało `orderOut` mimo trwającego dyktowania.
+Ukrywanie jest teraz anulowalnym zadaniem, a jedynym warunkiem jego wykonania
+jest zgodność pokolenia.
+
+**Ukrycie aplikacji ukrywało panel na stałe.** Elise działa jako zwykła
+aplikacja z ikoną w Docku, więc `⌘H` i „Ukryj inne” obejmowały również panel.
+Skrót `⌥Space` działa w ukrytej aplikacji, ale `orderFrontRegardless` nie
+pokazuje okna procesu w tym stanie — dyktowanie działało dalej, a animacja już
+nie wracała. Panel ma teraz wyłączone `canHide`, a ścieżka pokazywania odkrywa
+aplikację bez jej aktywowania. Nieudane wyniesienie okna po dwóch próbach trafia
+do `OSLog` w kategorii `overlay`.
+
 ## Stan końcowy
 
 Kod kompiluje się w Swift 6 z ostrzeżeniami traktowanymi jako błędy. Finalny
