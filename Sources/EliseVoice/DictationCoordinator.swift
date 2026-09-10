@@ -197,7 +197,7 @@ final class DictationCoordinator {
                 try await transcriptionService.prepare()
                 modelIsReady = true
             }
-            insertionTarget = try TextInserter.captureTarget()
+            insertionTarget = try await TextInserter.captureTarget()
             let microphoneWasAlreadyRunning = audioCapture.isMonitoring
             try ensureMicrophoneRunning()
 

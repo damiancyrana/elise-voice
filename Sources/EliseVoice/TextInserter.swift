@@ -11,6 +11,9 @@ enum TextInserterError: LocalizedError {
     case targetChanged
     case clipboardWriteFailed
     case eventCreationFailed
+    case manualPasteRequired
+    case insertionUnverified
+    case clipboardChanged
 
     var errorDescription: String? {
         switch self {
@@ -26,6 +29,12 @@ enum TextInserterError: LocalizedError {
             "Nie udało się skopiować rozpoznanego tekstu"
         case .eventCreationFailed:
             "Nie udało się wkleić rozpoznanego tekstu"
+        case .manualPasteRequired:
+            "Tekst jest w schowku — wklej go ręcznie w wybranym polu"
+        case .insertionUnverified:
+            "Nie potwierdzono wklejenia — tekst jest w schowku"
+        case .clipboardChanged:
+            "Schowek zmienił się przed wklejeniem — tekst dyktowania zachowano w schowku"
         }
     }
 }
@@ -34,6 +43,7 @@ struct TextInsertionTarget: @unchecked Sendable {
     fileprivate let frontmostApplicationPID: pid_t
     fileprivate let focusedElement: AXUIElement?
     fileprivate let focusedWindow: AXUIElement?
+    fileprivate let allowsAutomaticPaste: Bool
 }
 
 @MainActor
@@ -78,36 +88,63 @@ enum TextInserter {
         return AXIsProcessTrustedWithOptions(options)
     }
 
-    static func captureTarget() throws -> TextInsertionTarget {
+    static func captureTarget() async throws -> TextInsertionTarget {
         guard AXIsProcessTrusted() else {
             throw TextInserterError.accessibilityPermissionMissing
         }
+        _ = systemWideElement()
         guard let frontmostApplication = NSWorkspace.shared.frontmostApplication else {
             throw TextInserterError.noFocusedTextField
         }
         let frontmostPID = frontmostApplication.processIdentifier
 
+        let application = applicationElement(for: frontmostPID)
+        let attribute = "AXManualAccessibility" as CFString
+        // Discover Electron's protocol rather than maintaining a list of apps.
+        let manualAccessibility = optionalBooleanAttribute(attribute, of: application)
+        if manualAccessibility == false {
+            let status = AXUIElementSetAttributeValue(application, attribute, kCFBooleanTrue)
+            if status == .success {
+                // Let Electron publish its renderer tree before retaining an element.
+                try await Task.sleep(for: .milliseconds(100))
+            } else {
+                logger.notice("Could not enable application Accessibility: \(status.rawValue)")
+            }
+        }
+
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == frontmostPID else {
+            throw TextInserterError.noFocusedTextField
+        }
+
+        let window = focusedWindow(for: frontmostPID)
         if let element = focusedElement(for: frontmostPID) {
             guard !isSecureTextField(element) else {
                 throw TextInserterError.secureTextField
             }
+            let role = stringAttribute(kAXRoleAttribute as CFString, of: element)
+            let allowsAutomaticPaste = TextInsertionPolicy.allowsAutomaticPaste(
+                role: role,
+                isEditable: optionalBooleanAttribute("AXIsEditable" as CFString, of: element)
+            ) && optionalBooleanAttribute(kAXEnabledAttribute as CFString, of: element) != false
+            logger.info("Captured input: role=\(role ?? "unknown", privacy: .public), automatic paste=\(allowsAutomaticPaste)")
             return TextInsertionTarget(
                 frontmostApplicationPID: frontmostPID,
                 focusedElement: element,
-                focusedWindow: nil
+                focusedWindow: window,
+                allowsAutomaticPaste: allowsAutomaticPaste
             )
         }
 
-        guard TextInsertionPolicy.allowsBrowserWindowFallback(
-            bundleIdentifier: frontmostApplication.bundleIdentifier
-        ), let window = focusedWindow(for: frontmostPID) else {
-            throw TextInserterError.noFocusedTextField
-        }
-
+        // Unknown applications can still transcribe to the clipboard. Never
+        // guess a destination or reject the recording merely because AX is absent.
         return TextInsertionTarget(
             frontmostApplicationPID: frontmostPID,
             focusedElement: nil,
-            focusedWindow: window
+            focusedWindow: window,
+            allowsAutomaticPaste: window != nil && TextInsertionPolicy.allowsWindowFallback(
+                bundleIdentifier: frontmostApplication.bundleIdentifier,
+                supportsManualAccessibility: manualAccessibility != nil
+            )
         )
     }
 
@@ -129,62 +166,30 @@ enum TextInserter {
         if let element = target.focusedElement, isSecureTextField(element) {
             throw TextInserterError.secureTextField
         }
+        guard target.allowsAutomaticPaste else {
+            try copyPermanentlyToClipboard(text)
+            throw TextInserterError.manualPasteRequired
+        }
         guard targetIsStillFocused(target) else {
             try copyPermanentlyToClipboard(text)
             throw TextInserterError.targetChanged
         }
 
-        if let element = target.focusedElement {
-            let previousValue = stringAttribute(
-                kAXValueAttribute as CFString,
-                of: element
-            )
-            let previousSelection = stringAttribute(
-                kAXSelectedTextAttribute as CFString,
-                of: element
-            ) ?? ""
-            var isSettable: DarwinBoolean = false
-            let settableStatus = AXUIElementIsAttributeSettable(
-                element,
-                kAXSelectedTextAttribute as CFString,
-                &isSettable
-            )
-            if settableStatus == .success, isSettable.boolValue {
-                let status = AXUIElementSetAttributeValue(
-                    element,
-                    kAXSelectedTextAttribute as CFString,
-                    text as CFTypeRef
-                )
-                if status == .success {
-                    try? await Task.sleep(for: .milliseconds(25))
-                    let insertionWasApplied = previousValue == nil || stringAttribute(
-                        kAXValueAttribute as CFString,
-                        of: element
-                    ).map { newValue in
-                        TextInsertionPolicy.directInsertionWasApplied(
-                            previousValue: previousValue ?? "",
-                            previousSelection: previousSelection,
-                            newValue: newValue,
-                            insertedText: text
-                        )
-                    } == true
-                    if insertionWasApplied {
-                        logger.info("Transcript inserted through Accessibility API")
-                        return
-                    }
-                    logger.notice("Accessibility API reported success without changing text; using clipboard fallback")
-                }
-            }
-        }
-
+        // A native paste goes through the editor's input/undo pipeline. AX writes
+        // can mutate an accessibility value without updating a web editor's model.
         try await pasteThroughClipboard(text, target: target)
-        logger.info("Transcript inserted through guarded clipboard fallback")
     }
 
     private static func pasteThroughClipboard(
         _ text: String,
         target: TextInsertionTarget
     ) async throws {
+        let isTerminal = TextInsertionPolicy.isTerminalApplication(
+            bundleIdentifier: NSRunningApplication(processIdentifier: target.frontmostApplicationPID)?.bundleIdentifier
+        )
+        let expectedValue = isTerminal ? nil : target.focusedElement.flatMap {
+            Self.expectedValue(afterInserting: text, into: $0)
+        }
         let pasteboard = NSPasteboard.general
         let snapshot = PasteboardSnapshot(pasteboard: pasteboard)
         pasteboard.clearContents()
@@ -196,6 +201,10 @@ enum TextInserter {
         try await Task.sleep(for: .milliseconds(80))
         guard targetIsStillFocused(target) else {
             throw TextInserterError.targetChanged
+        }
+        guard pasteboard.changeCount == insertedTextChangeCount else {
+            try copyPermanentlyToClipboard(text)
+            throw TextInserterError.clipboardChanged
         }
         guard
             let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: 0x09, keyDown: true),
@@ -209,16 +218,55 @@ enum TextInserter {
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)
 
-        // The receiving process reads the pasteboard synchronously with the
-        // keyboard event. Return control quickly, but retain the previous
-        // contents for a conservative one-second restoration window.
-        try await Task.sleep(for: .milliseconds(120))
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(880))
-            if pasteboard.changeCount == insertedTextChangeCount {
-                snapshot.restore(to: pasteboard)
+        // Sending an event is not an acknowledgement from the receiving app.
+        // Restore the old clipboard only after observing the exact expected edit.
+        // Otherwise retain the transcript, including for slow/opaque editors.
+        if let element = target.focusedElement, let expectedValue {
+            for _ in 0..<5 {
+                try await Task.sleep(for: .milliseconds(100))
+                guard targetIsStillFocused(target) else {
+                    logger.notice("Focus changed after paste dispatch; transcript retained in clipboard")
+                    return
+                }
+                if stringAttribute(kAXValueAttribute as CFString, of: element) == expectedValue {
+                    logger.info("Transcript insertion verified")
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(1))
+                        if pasteboard.changeCount == insertedTextChangeCount {
+                            snapshot.restore(to: pasteboard)
+                        }
+                    }
+                    return
+                }
             }
+            throw TextInserterError.insertionUnverified
         }
+        logger.info("Paste shortcut dispatched; transcript retained because the target cannot confirm insertion")
+    }
+
+    private static func expectedValue(afterInserting text: String, into element: AXUIElement) -> String? {
+        // Multiple selections cannot be verified as a single replacement.
+        var selections: CFTypeRef?
+        if AXUIElementCopyAttributeValue(
+            element, kAXSelectedTextRangesAttribute as CFString, &selections
+        ) == .success, let ranges = selections as? [Any], ranges.count > 1 {
+            return nil
+        }
+        guard let value = stringAttribute(kAXValueAttribute as CFString, of: element) else { return nil }
+        var rangeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element, kAXSelectedTextRangeAttribute as CFString, &rangeValue
+        ) == .success, let rangeValue, CFGetTypeID(rangeValue) == AXValueGetTypeID() else { return nil }
+        let axValue = unsafeDowncast(rangeValue, to: AXValue.self)
+        guard AXValueGetType(axValue) == .cfRange else { return nil }
+        var range = CFRange()
+        guard AXValueGetValue(axValue, .cfRange, &range) else { return nil }
+        return TextInsertionPolicy.expectedValueAfterInsertion(
+            previousValue: value,
+            selectionLocation: range.location,
+            selectionLength: range.length,
+            insertedText: text
+        )
     }
 
     private static func targetIsStillFocused(_ target: TextInsertionTarget) -> Bool {
@@ -227,8 +275,17 @@ enum TextInserter {
             return false
         }
 
+        if let window = target.focusedWindow {
+            guard let currentWindow = focusedWindow(for: target.frontmostApplicationPID),
+                  CFEqual(currentWindow, window) else { return false }
+        }
+
         if let element = target.focusedElement {
             guard let current = focusedElement(for: target.frontmostApplicationPID) else {
+                return false
+            }
+            guard !isSecureTextField(current),
+                  optionalBooleanAttribute(kAXEnabledAttribute as CFString, of: current) != false else {
                 return false
             }
             return TextInsertionPolicy.targetIsStillFocused(
@@ -242,6 +299,11 @@ enum TextInserter {
               let current = focusedWindow(for: target.frontmostApplicationPID) else {
             return false
         }
+        // A lazily exposed field may become available during transcription.
+        if let currentElement = focusedElement(for: target.frontmostApplicationPID),
+           isSecureTextField(currentElement) {
+            return false
+        }
         return TextInsertionPolicy.targetIsStillFocused(
             frontmostApplicationPID: target.frontmostApplicationPID,
             targetApplicationPID: target.frontmostApplicationPID,
@@ -250,23 +312,31 @@ enum TextInserter {
     }
 
     private static func focusedElement(for processIdentifier: pid_t) -> AXUIElement? {
-        if let element = elementAttribute(
-            kAXFocusedUIElementAttribute as CFString,
-            of: systemWideElement()
-        ) {
-            return element
-        }
-
-        if let element = elementAttribute(
+        // Prefer the application's own focus. A system-wide query can return a
+        // stale element from another app; renderer PIDs alone cannot identify it.
+        let applicationFocus = elementAttribute(
             kAXFocusedUIElementAttribute as CFString,
             of: applicationElement(for: processIdentifier)
-        ) {
+        )
+        if let element = applicationFocus, isTextInput(element) || isSecureTextField(element) {
             return element
         }
-        guard let window = focusedWindow(for: processIdentifier) else {
-            return nil
+        guard let window = focusedWindow(for: processIdentifier) else { return applicationFocus }
+        if let element = elementAttribute(
+            kAXFocusedUIElementAttribute as CFString, of: systemWideElement()
+        ), let elementWindow = elementAttribute(kAXWindowAttribute as CFString, of: element),
+           CFEqual(elementWindow, window) {
+            if isTextInput(element) || isSecureTextField(element) { return element }
         }
-        return focusedDescendant(of: window)
+        // WebKit may report its container while a nested HTML input owns focus.
+        return focusedDescendant(of: applicationFocus ?? window) ?? applicationFocus
+    }
+
+    private static func isTextInput(_ element: AXUIElement) -> Bool {
+        TextInsertionPolicy.allowsAutomaticPaste(
+            role: stringAttribute(kAXRoleAttribute as CFString, of: element),
+            isEditable: optionalBooleanAttribute("AXIsEditable" as CFString, of: element)
+        )
     }
 
     private static func focusedWindow(for processIdentifier: pid_t) -> AXUIElement? {
@@ -293,6 +363,7 @@ enum TextInserter {
         let deadline = ProcessInfo.processInfo.systemUptime + treeSearchBudget
         var elements = childElements(of: root)
         var inspectedElementCount = 0
+        var focusedContainer: AXUIElement?
 
         while let element = elements.popLast(),
               inspectedElementCount < maximumInspectedElements {
@@ -302,11 +373,12 @@ enum TextInserter {
             }
             inspectedElementCount += 1
             if booleanAttribute(kAXFocusedAttribute as CFString, of: element) {
-                return element
+                if isTextInput(element) || isSecureTextField(element) { return element }
+                if focusedContainer == nil { focusedContainer = element }
             }
             elements.append(contentsOf: childElements(of: element))
         }
-        return nil
+        return focusedContainer
     }
 
     private static func childElements(of element: AXUIElement) -> [AXUIElement] {
@@ -321,15 +393,17 @@ enum TextInserter {
         return value as? [AXUIElement] ?? []
     }
 
-    private static func booleanAttribute(
+    private static func booleanAttribute(_ attribute: CFString, of element: AXUIElement) -> Bool {
+        optionalBooleanAttribute(attribute, of: element) == true
+    }
+
+    private static func optionalBooleanAttribute(
         _ attribute: CFString,
         of element: AXUIElement
-    ) -> Bool {
+    ) -> Bool? {
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
-            return false
-        }
-        return value as? Bool ?? false
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return nil }
+        return value as? Bool
     }
 
     private static func stringAttribute(
