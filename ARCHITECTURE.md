@@ -41,15 +41,20 @@ zatrzymywany przed uruchomieniem transkrypcji.
    bezwarunkowe: każde wywołanie ponownie ustawia pozycję i wynosi okno na
    wierzch, a zmiana przestrzeni lub konfiguracji ekranów wymusza to samo.
 6. `TextInserter` ogranicza czas zapytań Accessibility do `0,5 s`, a
-   przeszukiwanie drzewa elementów do `0,3 s`, żeby zawieszona aplikacja na
-   pierwszym planie nie blokowała głównego wątku. Zapamiętuje aktywną aplikację
-   i dokładny element AX na początku nagrania. Obsługuje elementy webowe udostępniane przez proces
-   renderera przeglądarki. Najpierw próbuje bezpośredniej edycji AX, potem
-   kontrolowanego `⌘V`. Pola `AXSecureTextField` są zawsze odrzucane. Jeśli
-   fokus się zmienił, tekst pozostaje w schowku zamiast trafić do przypadkowego
-   miejsca. Gdy przeglądarka nie wystawia aktywnego elementu AX, fallback jest
-   dostępny tylko dla rozpoznanych przeglądarek i wymaga tego samego aktywnego
-   okna.
+   przeszukiwanie drzewa do `0,3 s`. Rozpoznaje protokół `AXManualAccessibility`
+   na podstawie odpowiedzi aplikacji, włącza go w obsługujących go programach
+   i asynchronicznie czeka 100 ms. Szuka również aktywnego pola wewnątrz
+   kontenera webowego. Zapamiętuje aplikację, okno i dostępny element AX.
+   Wstawia przez standardowe `⌘V`, zachowując ścieżkę obsługi wejścia i cofania
+   aplikacji docelowej. Pola haseł są odrzucane. Jeżeli cel się zmienił, tekst
+   pozostaje w schowku. Gdy pole jest niewidoczne dla AX, rozpoznane
+   przeglądarki, aplikacje z protokołem Electron i Terminal/iTerm2 mogą użyć
+   kontroli tego samego okna; w tym trybie nie da się rozróżnić niewidocznych
+   pól tego okna. Pozostałe środowiska pozwalają nagrać tekst do ręcznego
+   wklejenia. Poprzedni schowek jest przywracany tylko po odczytaniu dokładnie
+   oczekiwanej zmiany tekstu i pod warunkiem, że nikt nie zmienił schowka.
+   Brak potwierdzenia nie uruchamia ponownego wklejenia.
+
 7. `LaunchAtLoginService` używa `SMAppService.mainApp`.
 
 ## Modele

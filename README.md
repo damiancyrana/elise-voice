@@ -34,7 +34,8 @@ Dokumentacja techniczna:
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — komponenty, przepływy i granice systemu,
 - [PROBLEMS.md](PROBLEMS.md) — napotkane problemy i podjęte decyzje,
-- [KNOW_HOW.md](KNOW_HOW.md) — budowanie, testowanie i wydanie.
+- [KNOW_HOW.md](KNOW_HOW.md) — budowanie, testowanie i wydanie,
+- [INPUT_COMPATIBILITY.md](INPUT_COMPATIBILITY.md) — zgodność pól tekstowych i wyniki audytu.
 
 ## Model i wydajność
 
@@ -72,6 +73,7 @@ Gdy zniknie, aplikacja jest gotowa.
 
 ```bash
 ./scripts/check.sh                 # kompilacja, polityki i metadane
+./scripts/check-insertion-integration.sh # testy żywego AppKit/WebKit; wymagają fokusu
 ./scripts/check-long-dictation.sh  # polskie nagranie dłuższe niż minuta
 ./scripts/check-production.sh      # pełna kontrola pakietu wydania
 ./scripts/benchmark-asr.sh         # porównanie 1–4 workerów WhisperKit

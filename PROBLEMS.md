@@ -88,14 +88,33 @@ transkrypcji skaluje się z długością audio.
 ## 9. Bezpieczne wklejanie
 
 Fokus może zmienić się między początkiem nagrania a zakończeniem transkrypcji.
-Elise zapamiętuje aktywną aplikację i element AX, odrzuca
-`AXSecureTextField`, ponownie sprawdza fokus i preferuje bezpośrednią zmianę
-wartości AX. Element edytora webowego może należeć do procesu renderera, więc
-nie jest błędnie odrzucany tylko z powodu innego PID. Brak rzeczywistej zmiany
-uruchamia kontrolowane `⌘V`. Przy błędzie tekst pozostaje w schowku zamiast
-trafić do przypadkowego pola. Jeżeli Chrome lub inna obsługiwana przeglądarka
-nie udostępnia elementu edytora przez AX, Elise weryfikuje zamiast niego aktywną
-aplikację i dokładne okno przeglądarki.
+Elise zapamiętuje aktywną aplikację, okno i element AX. Zapytanie do aplikacji
+ma pierwszeństwo przed zapytaniem systemowym; element z zapytania systemowego
+musi należeć do jej okna. Element renderera może mieć inny PID. Kontener
+webowy jest przeszukiwany w celu odnalezienia rzeczywiście aktywnego pola.
+
+Sama nazwa aplikacji nie wystarcza do rozpoznania jej mechanizmu Accessibility.
+Elise wykrywa `AXManualAccessibility` w dowolnej aplikacji obsługującej ten
+protokół, a po włączeniu daje jej 100 ms na publikację drzewa. To obejmuje
+również nowe edytory oparte na Electron. Jeśli pole pozostaje niewidoczne,
+rozpoznane przeglądarki, aplikacje udostępniające ten protokół oraz Terminal
+i iTerm2 mogą użyć dokładnego okna jako celu. W tej ścieżce nie można wykryć
+zmiany między niewidocznymi polami tego samego okna. Później ujawnione pole
+hasła jest jednak odrzucane. Pozostałe programy otrzymują tryb ręcznego
+wklejenia: brak Accessibility pola nie blokuje samego nagrania.
+
+Bezpośrednie ustawienie `AXSelectedText` zastąpiono standardowym wklejeniem.
+Testy sprawdzają nie tylko wartość AX, ale stan kontrolki, model DOM,
+zdarzenie `input` i cofanie. Przed wysłaniem `⌘V` ponownie sprawdzany jest
+cel i licznik zmian schowka, aby nie wkleić przypadkowo innej zawartości.
+
+Wysłanie zdarzenia nie oznacza jego odebrania. Przywracanie starego schowka
+po stałej sekundzie mogło odebrać tekst powolnej aplikacji. Teraz Elise
+przywraca go tylko po dokładnym potwierdzeniu edycji, z uwzględnieniem
+zakresu UTF-16, i tylko jeśli schowek nadal do niej należy. Bez potwierdzenia
+tekst pozostaje w schowku. Nie ma automatycznej ponownej próby, która mogłaby
+zdublować tekst. Ograniczenia i macierz weryfikacji opisuje
+[INPUT_COMPATIBILITY.md](INPUT_COMPATIBILITY.md).
 
 ## 10. Prywatność i cykl mikrofonu
 
